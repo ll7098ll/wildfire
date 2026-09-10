@@ -1,0 +1,7 @@
+{
+  "name": "산불 3D 시뮬레이터 (Wildfire 3D Simulation)",
+  "description": "Three.js 기반의 실시간 산불 발화 및 확산 3D 시뮬레이션 대시보드",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

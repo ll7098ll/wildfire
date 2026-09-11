@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { Activity, AlertTriangle, ChevronDown, ChevronUp, Flame, ShieldAlert, Timer, Trees, Wind } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { Activity, AlertTriangle, BrainCircuit, ChevronDown, ChevronUp, Flame, ShieldAlert, Timer, Trees, Wind } from 'lucide-react';
 import { SimulationStats, WeatherConditions } from '../types';
+import { predictWildfireRisk } from '../simulation/wildfireRiskModel';
 
 interface FireMetricsOverlayProps {
   stats: SimulationStats;
@@ -10,6 +11,10 @@ interface FireMetricsOverlayProps {
 export const FireMetricsOverlay: React.FC<FireMetricsOverlayProps> = ({ stats, weather }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
+  const aiRisk = useMemo(() => {
+    return predictWildfireRisk(weather.temperature, weather.humidity, weather.wind.speed);
+  }, [weather.temperature, weather.humidity, weather.wind.speed]);
+
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -18,11 +23,26 @@ export const FireMetricsOverlay: React.FC<FireMetricsOverlayProps> = ({ stats, w
 
   const isAlarm = stats.activeFires > 0;
 
+  const getRiskColor = (level: string) => {
+    switch (level) {
+      case '낮음':
+        return 'text-emerald-400 bg-emerald-950/60 border-emerald-500/40';
+      case '보통':
+        return 'text-amber-400 bg-amber-950/60 border-amber-500/40';
+      case '높음':
+        return 'text-orange-400 bg-orange-950/60 border-orange-500/40';
+      case '매우높음':
+        return 'text-rose-400 bg-rose-950/60 border-rose-500/40 animate-pulse';
+      default:
+        return 'text-stone-400 bg-stone-900 border-stone-700';
+    }
+  };
+
   return (
-    <div className="absolute top-4 left-4 z-20 flex flex-col gap-3 pointer-events-none max-w-sm w-full">
+    <header aria-label="산불 실시간 관제 및 AI 위험도 현황" className="absolute top-4 left-4 z-20 flex flex-col gap-3 pointer-events-none max-w-sm w-full">
       {/* Title & Status Indicator */}
       <div className="bg-stone-950/85 backdrop-blur-md border border-stone-800/80 rounded-xl p-3.5 shadow-2xl text-stone-100 transition-all duration-300">
-        <div className={`flex items-center justify-between ${isCollapsed ? '' : 'mb-3 border-b border-stone-800/60 pb-2.5'}`}>
+        <div className={`flex items-center justify-between ${isCollapsed ? '' : 'mb-2.5 border-b border-stone-800/60 pb-2.5'}`}>
           <div className="flex items-center gap-2">
             <Flame className={`w-5 h-5 ${isAlarm ? 'text-orange-500 animate-pulse' : 'text-stone-500'}`} />
             <h1 className="font-semibold text-base tracking-tight">산불 3D 실시간 관제</h1>
@@ -55,6 +75,19 @@ export const FireMetricsOverlay: React.FC<FireMetricsOverlayProps> = ({ stats, w
         {/* Collapsible Content */}
         {!isCollapsed && (
           <div className="transition-all duration-300">
+            {/* AI Risk Level Banner */}
+            <div className="mb-2.5 px-2.5 py-1.5 rounded-lg bg-stone-900/80 border border-stone-800/90 flex items-center justify-between text-xs">
+              <div className="flex items-center gap-1.5 text-stone-300">
+                <BrainCircuit className="w-3.5 h-3.5 text-orange-400" />
+                <span>AI 판별 위험도</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className={`px-2 py-0.5 rounded font-bold border text-xs font-mono ${getRiskColor(aiRisk.level)}`}>
+                  {aiRisk.level} ({aiRisk.score}점)
+                </span>
+              </div>
+            </div>
+
             {/* Primary Metrics Grid */}
             <div className="grid grid-cols-2 gap-2.5">
               {/* Active Flames */}
@@ -137,6 +170,6 @@ export const FireMetricsOverlay: React.FC<FireMetricsOverlayProps> = ({ stats, w
           </div>
         )}
       </div>
-    </div>
+    </header>
   );
 };

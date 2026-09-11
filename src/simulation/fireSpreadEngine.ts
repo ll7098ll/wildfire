@@ -1,5 +1,6 @@
-import { CellStatus, FireFrontPoint, SimulationStats, TerrainCell, WeatherConditions } from '../types';
+import { CellStatus, FireFrontPoint, RiskLevel, SimulationStats, TerrainCell, WeatherConditions } from '../types';
 import { CELL_SPACING, GRID_SIZE } from './terrainData';
+import { predictWildfireRisk } from './wildfireRiskModel';
 
 export class FireSpreadEngine {
   private grid: TerrainCell[][];
@@ -96,6 +97,7 @@ export class FireSpreadEngine {
     dz: number,
     dist: number,
     weather: WeatherConditions,
+    spreadMultiplier = 1.0,
   ): number {
     if (target.status !== CellStatus.UNBURNED || target.fuel <= 0.08) {
       return 0;
@@ -103,9 +105,9 @@ export class FireSpreadEngine {
 
     // 1. Base fuel & moisture factor
     // Dryness factor: humidity 10% -> 0.95, 80% -> 0.3
-    const dryness = Math.max(0.2, (100 - weather.humidity * 0.85) / 100);
-    const tempFactor = Math.min(1.6, Math.max(0.8, weather.temperature / 26));
-    const baseRate = 0.15 * target.fuel * dryness * tempFactor;
+    const dryness = Math.max(0.12, (100 - weather.humidity * 0.88) / 100);
+    const tempFactor = Math.min(1.8, Math.max(0.6, weather.temperature / 24));
+    const baseRate = 0.15 * target.fuel * dryness * tempFactor * spreadMultiplier;
 
     // 2. Wind effect
     // Convert wind angle (degrees, 0 is blowing toward -Z North)
@@ -125,10 +127,10 @@ export class FireSpreadEngine {
     let windFactor = 1.0;
     if (windAlignment > 0) {
       // Wind blowing fire forward: strong propagation boost along wind direction
-      windFactor = 1.0 + Math.pow(wSpeed / 4.5, 1.25) * windAlignment * 2.8;
+      windFactor = 1.0 + Math.pow(wSpeed / 4.2, 1.3) * windAlignment * (2.2 * Math.min(2.0, spreadMultiplier));
     } else {
       // Backwind resists fire spread but doesn't completely halt it
-      windFactor = Math.max(0.22, 1.0 / (1.0 + (wSpeed / 7) * Math.abs(windAlignment)));
+      windFactor = Math.max(0.18, 1.0 / (1.0 + (wSpeed / 6) * Math.abs(windAlignment)));
     }
 
     // 3. Slope effect (crucial for mountainous wildfire!)
@@ -138,10 +140,10 @@ export class FireSpreadEngine {
     let slopeFactor = 1.0;
     if (slopeTan > 0) {
       // Uphill acceleration
-      slopeFactor = 1.0 + Math.min(4.2, 3.2 * Math.pow(slopeTan, 1.1));
+      slopeFactor = 1.0 + Math.min(4.8, 3.5 * Math.pow(slopeTan, 1.15) * Math.sqrt(spreadMultiplier));
     } else {
       // Downhill deceleration
-      slopeFactor = Math.max(0.4, 1.0 / (1.0 + 1.8 * Math.abs(slopeTan)));
+      slopeFactor = Math.max(0.3, 1.0 / (1.0 + 2.0 * Math.abs(slopeTan)));
     }
 
     // Combined spread rate
@@ -153,6 +155,11 @@ export class FireSpreadEngine {
     this.elapsedSeconds += dt;
     const newlyIgnited: Array<{ x: number; z: number }> = [];
     const extinguished: string[] = [];
+
+    // Evaluate AI Risk Profile from real weather values
+    const aiRisk = predictWildfireRisk(weather.temperature, weather.humidity, weather.wind.speed);
+    const spreadMult = aiRisk.spreadMultiplier;
+    const spottingMult = aiRisk.spottingProbabilityFactor;
 
     let sumX = 0;
     let sumY = 0;
@@ -185,12 +192,22 @@ export class FireSpreadEngine {
       sumY += cell.height;
       sumZ += wz;
 
-      // Update burning progress (cells burn for ~14-20 seconds for authentic sustained firefront)
-      const burnSpeed = (0.055 + weather.wind.speed * 0.0018) * dt;
+      // Update burning progress (burn rate accelerates under extreme risk, burns slower in damp conditions)
+      const burnSpeed = (0.05 + weather.wind.speed * 0.0016) * dt * (0.6 + spreadMult * 0.4);
       cell.burnProgress += burnSpeed;
-      // High heat curve that peaks early and stays hot during peak combustion
-      cell.temperature = Math.sin(Math.pow(Math.min(1.0, cell.burnProgress), 0.75) * Math.PI) * 0.85 + 0.15;
+
+      // Heat curve scaled by AI flame intensity
+      const baseTemp = Math.sin(Math.pow(Math.min(1.0, cell.burnProgress), 0.75) * Math.PI) * 0.85 + 0.15;
+      cell.temperature = Math.min(1.0, baseTemp * aiRisk.flameIntensityScale);
       if (cell.temperature > peakIntensity) peakIntensity = cell.temperature;
+
+      // In '낮음' (Low risk) damp conditions: Chance of self-extinguishing due to moisture
+      if (aiRisk.level === '낮음' && cell.burnProgress > 0.4 && Math.random() < 0.08 * dt) {
+        cell.status = CellStatus.BURNED;
+        extinguished.push(key);
+        this.burnedCount++;
+        continue;
+      }
 
       // When fully consumed
       if (cell.burnProgress >= 1.0) {
@@ -210,25 +227,28 @@ export class FireSpreadEngine {
 
         const target = this.grid[nz][nx];
         if (target.status === CellStatus.UNBURNED) {
-          const prob = this.calculateSpreadProbability(cell, target, n.dx, n.dz, n.dist, weather);
-          // Exponential chance to ignite per frame: ~35-70% per sec downwind, realistic advance
-          const ignitionProb = 1.0 - Math.exp(-prob * dt * 4.8);
+          const prob = this.calculateSpreadProbability(cell, target, n.dx, n.dz, n.dist, weather, spreadMult);
+          // Exponential chance to ignite per frame: dynamically scaled with AI spreadMultiplier
+          const ignitionProb = 1.0 - Math.exp(-prob * dt * 4.5);
           if (Math.random() < ignitionProb) {
             newlyIgnited.push({ x: nx, z: nz });
           }
         }
       }
 
-      // Spotting fire (비화 현상): 강풍 시 불씨가 멀리 튀어 신규 발화
-      if (weather.spottingEnabled && weather.wind.speed > 8 && Math.random() < 0.008 * dt * (weather.wind.speed / 10)) {
+      // Spotting fire (비화 현상): 강풍 + 고위험 상태에서 불씨가 멀리 날아가 신규 발화
+      const canSpot = weather.spottingEnabled && spottingMult > 0 && (weather.wind.speed > 6 || aiRisk.level === '매우높음');
+      if (canSpot && Math.random() < 0.006 * dt * (weather.wind.speed / 8) * spottingMult) {
         const windRad = (weather.wind.direction * Math.PI) / 180;
-        const throwDist = 2 + Math.floor(Math.random() * (weather.wind.speed * 0.4));
-        const spotX = x + Math.round(Math.sin(windRad) * throwDist + (Math.random() - 0.5) * 2);
-        const spotZ = z + Math.round(-Math.cos(windRad) * throwDist + (Math.random() - 0.5) * 2);
+        // Spotting throw distance scales with risk level
+        const maxDist = aiRisk.level === '매우높음' ? weather.wind.speed * 0.7 : weather.wind.speed * 0.35;
+        const throwDist = 2 + Math.floor(Math.random() * maxDist);
+        const spotX = x + Math.round(Math.sin(windRad) * throwDist + (Math.random() - 0.5) * 3);
+        const spotZ = z + Math.round(-Math.cos(windRad) * throwDist + (Math.random() - 0.5) * 3);
 
         if (spotX >= 0 && spotX < GRID_SIZE && spotZ >= 0 && spotZ < GRID_SIZE) {
           const spotTarget = this.grid[spotZ][spotX];
-          if (spotTarget.status === CellStatus.UNBURNED && spotTarget.fuel > 0.15) {
+          if (spotTarget.status === CellStatus.UNBURNED && spotTarget.fuel > 0.12) {
             newlyIgnited.push({ x: spotX, z: spotZ });
           }
         }

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { FireFrontPoint, WeatherConditions } from '../types';
+import { predictWildfireRisk } from '../simulation/wildfireRiskModel';
 
 export class FireParticleSystem {
   public group: THREE.Group;
@@ -216,17 +217,19 @@ export class FireParticleSystem {
     const windDirZ = -Math.cos(windRad) * (weather.wind.speed * 0.25);
 
     const hasFires = firePoints.length > 0;
+    const aiRisk = predictWildfireRisk(weather.temperature, weather.humidity, weather.wind.speed);
+    const flameScale = aiRisk.flameIntensityScale;
 
     // 1. UPDATE 3D FLAME COLUMN MESHES
     const numColumns = Math.min(this.maxColumns, firePoints.length);
     for (let i = 0; i < this.maxColumns; i++) {
       if (i < numColumns) {
         const p = firePoints[i];
-        // Dynamic flame flicker & thermal stretch
+        // Dynamic flame flicker & thermal stretch scaled by AI risk
         const flicker = 0.8 + 0.35 * Math.sin(this.flameTime * 14 + i * 2.1) + 0.15 * Math.cos(this.flameTime * 22 + i);
-        const scaleX = (1.0 + p.intensity * 0.6) * flicker;
-        const scaleY = (1.2 + p.intensity * 1.5) * flicker;
-        const scaleZ = (1.0 + p.intensity * 0.6) * flicker;
+        const scaleX = (1.0 + p.intensity * 0.6) * flicker * Math.sqrt(flameScale);
+        const scaleY = (1.2 + p.intensity * 1.6) * flicker * flameScale;
+        const scaleZ = (1.0 + p.intensity * 0.6) * flicker * Math.sqrt(flameScale);
 
         // Lean slightly with wind
         const tiltX = windDirX * 0.08;
@@ -282,15 +285,15 @@ export class FireParticleSystem {
         const p = firePoints[flameSpawnIndex % firePoints.length];
         flameSpawnIndex += 1;
 
-        this.flamePositions[i * 3] = p.x + (Math.random() - 0.5) * 2.8;
+        this.flamePositions[i * 3] = p.x + (Math.random() - 0.5) * 2.8 * flameScale;
         this.flamePositions[i * 3 + 1] = p.y + Math.random() * 1.5;
-        this.flamePositions[i * 3 + 2] = p.z + (Math.random() - 0.5) * 2.8;
+        this.flamePositions[i * 3 + 2] = p.z + (Math.random() - 0.5) * 2.8 * flameScale;
 
         this.flameVelocities[i * 3] = (Math.random() - 0.5) * 2.0;
-        this.flameVelocities[i * 3 + 1] = 4.0 + Math.random() * 5.0; // Updraft
+        this.flameVelocities[i * 3 + 1] = (3.5 + Math.random() * 4.5) * Math.sqrt(flameScale); // Updraft
         this.flameVelocities[i * 3 + 2] = (Math.random() - 0.5) * 2.0;
 
-        this.flameLifes[i] = 0.65 + Math.random() * 0.55;
+        this.flameLifes[i] = (0.55 + Math.random() * 0.5) * Math.min(1.5, flameScale);
       }
     }
     (this.flameGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
@@ -323,7 +326,7 @@ export class FireParticleSystem {
         this.smokePositions[i * 3 + 2] = p.z + (Math.random() - 0.5) * 3.5;
 
         this.smokeVelocities[i * 3] = (Math.random() - 0.5) * 2.0;
-        this.smokeVelocities[i * 3 + 1] = 5.0 + Math.random() * 5.0; // High atmospheric climb
+        this.smokeVelocities[i * 3 + 1] = (4.0 + Math.random() * 4.5) * Math.sqrt(flameScale); // High atmospheric climb
         this.smokeVelocities[i * 3 + 2] = (Math.random() - 0.5) * 2.0;
 
         this.smokeLifes[i] = 1.0;
@@ -333,6 +336,7 @@ export class FireParticleSystem {
 
     // 4. UPDATE EMBERS / SPARKS
     let emberSpawnIndex = 0;
+    const canSpawnEmbers = aiRisk.spottingProbabilityFactor > 0.1;
     for (let i = 0; i < this.maxEmbers; i++) {
       if (this.emberLifes[i] > 0) {
         this.emberLifes[i] -= dt * 0.75;
@@ -346,7 +350,7 @@ export class FireParticleSystem {
         if (this.emberLifes[i] <= 0) {
           this.emberPositions[i * 3 + 1] = -1000;
         }
-      } else if (hasFires && emberSpawnIndex < this.maxEmbers) {
+      } else if (hasFires && canSpawnEmbers && emberSpawnIndex < this.maxEmbers) {
         const p = firePoints[emberSpawnIndex % firePoints.length];
         emberSpawnIndex += 1;
 
@@ -355,10 +359,10 @@ export class FireParticleSystem {
         this.emberPositions[i * 3 + 2] = p.z + (Math.random() - 0.5) * 2.0;
 
         this.emberVelocities[i * 3] = (Math.random() - 0.5) * 5.0;
-        this.emberVelocities[i * 3 + 1] = 7.0 + Math.random() * 9.0; // Violent updraft eruption
+        this.emberVelocities[i * 3 + 1] = (6.0 + Math.random() * 8.0) * aiRisk.spottingProbabilityFactor; // Violent updraft eruption
         this.emberVelocities[i * 3 + 2] = (Math.random() - 0.5) * 5.0;
 
-        this.emberLifes[i] = 0.9 + Math.random() * 1.1;
+        this.emberLifes[i] = (0.8 + Math.random() * 0.9) * Math.min(1.4, aiRisk.spottingProbabilityFactor);
       }
     }
     (this.emberGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;

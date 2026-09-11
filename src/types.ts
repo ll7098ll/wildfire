@@ -24,11 +24,37 @@ export interface WindConditions {
   direction: number; // degrees (0 to 360), 0 is North (+Z to -Z)
 }
 
+export type RiskLevel = '낮음' | '보통' | '높음' | '매우높음';
+
+export interface RiskPredictionResult {
+  level: RiskLevel;
+  score: number; // 0 ~ 100
+  probabilities: {
+    낮음: number;
+    보통: number;
+    높음: number;
+    매우높음: number;
+  };
+  spreadMultiplier: number; // 0.35 (낮음) ~ 2.8 (매우높음)
+  flameIntensityScale: number; // visual scale 0.5 ~ 2.2
+  spottingProbabilityFactor: number; // 0.0 ~ 3.5
+  description: string;
+  nearestNeighbors: Array<{
+    temperature: number;
+    humidity: number;
+    windSpeed: number;
+    risk: RiskLevel;
+    distance: number;
+  }>;
+}
+
 export interface WeatherConditions {
-  humidity: number; // % (10 to 90)
-  temperature: number; // Celsius (15 to 42)
+  humidity: number; // % (5 to 100)
+  temperature: number; // Celsius (0 to 45)
   wind: WindConditions;
   spottingEnabled: boolean; // 비화(불씨 날림) 활성화 여부
+  riskLevel?: RiskLevel;
+  riskScore?: number;
 }
 
 export interface SimulationStats {

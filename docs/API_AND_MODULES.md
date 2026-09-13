@@ -24,8 +24,8 @@ export enum CellStatus {
 | 속성명 | 타입 | 설명 |
 | :--- | :--- | :--- |
 | `x`, `z` | `number` | 격자 인덱스 좌표 ($0 \sim 127$) |
-| `height` | `number` | 해발 고도 ($0 \sim 220\text{m}$) |
-| `status` | `CellStatus` | 현재 연소 상태 |
+| `height` | `number` | 해발 고도 ($0 \sim 1,450\text{m}$) |
+| `status` | `CellStatus` | 현재 연소 상태 (`UNBURNED`, `IGNITING`, `BURNING`, `BURNED`) |
 | `fuel` | `number` | 잔여 가연물 밀도 ($0.0 \sim 1.0$) |
 | `maxFuel` | `number` | 초기 최대 가연물 밀도 ($0.0 \sim 1.0$) |
 | `burnProgress` | `number` | 연소 진행률 ($0.0 \sim 1.0$, $1.0$ 도달 시 BURNED) |
@@ -33,41 +33,51 @@ export enum CellStatus {
 | `slopeX`, `slopeZ`| `number` | $X$축, $Z$축 수치 경사도 구배 (Gradient) |
 | `treeId` | `number` | 해당 셀 위에 배치된 수목 인덱스 (-1이면 없음) |
 
-### 1.3 `WeatherConditions` (인터페이스)
-기상 환경 변수를 지정합니다.
+### 1.3 `WeatherConditions` 및 `WindConditions` (인터페이스)
+광역 기상 환경 변수 및 AI 위험도 필드를 지정합니다.
 
 ```typescript
 export interface WindConditions {
-  speed: number;     // 풍속 (0 ~ 25 m/s)
+  speed: number;     // 풍속 (0.0 ~ 45.0 m/s)
   direction: number; // 풍향 방위각 (0 ~ 360°, 0은 북풍)
 }
 
+export type RiskLevel = '낮음' | '보통' | '높음' | '매우높음';
+
 export interface WeatherConditions {
-  humidity: number;         // 상대 습도 (10 ~ 90 %)
-  temperature: number;      // 대기 기온 (15 ~ 42 ℃)
+  humidity: number;         // 상대 습도 (5 ~ 100 %)
+  temperature: number;      // 대기 기온 (-10 ~ 48 ℃)
   wind: WindConditions;     // 풍속 및 풍향
   spottingEnabled: boolean; // 비화(불씨 도약) 활성화 여부
+  riskLevel?: RiskLevel;    // AI 산정 위험 등급
+  riskScore?: number;       // AI 산정 위험 지수 (0 ~ 100)
 }
 ```
 
 ### 1.4 `SimulationStats` (인터페이스)
-실시간 관제 HUD에 바인딩되는 집계 통계입니다.
+실시간 관제 HUD 및 통계 차트에 바인딩되는 집계 데이터입니다.
 
 ```typescript
+export type TerrainScaleMode = '100x';
+
 export interface SimulationStats {
   activeFires: number;       // 활성 연소 셀 수
   burnedAreaHa: number;      // 소실 면적 (ha)
+  burnedAreaKm2: number;     // 소실 면적 (km²)
   totalForestHa: number;     // 전체 산림 면적 (ha)
+  totalAreaKm2: number;      // 전체 지형 면적 (km², 100 km²)
   burnedPercentage: number;  // 산림 소실률 (0 ~ 100 %)
   spreadRateMMin: number;    // 화선 전파 속도 (m/min)
   elapsedSeconds: number;    // 시뮬레이션 경과 시간 (초)
   peakIntensity: number;     // 현재 화염 최고 강도 (0.0 ~ 1.0)
+  scaleMode: TerrainScaleMode; // '100x' 고정
+  treeCount?: number;        // 배치된 총 수목 수
 }
 ```
 
 ---
 
-## 2. 시뮬레이션 엔진 모듈
+## 2. 시뮬레이션 및 AI 모델 모듈
 
 ### 2.1 `FireSpreadEngine` (`src/simulation/fireSpreadEngine.ts`)
 
@@ -75,7 +85,7 @@ export interface SimulationStats {
 ```typescript
 constructor(initialGrid: TerrainCell[][])
 ```
-* $128 \times 128$ 초기 격자 배열을 받아 엔진을 초기화하고 총 산림 셀 수를 집계합니다.
+* $128 \times 128$ 초기 격자 배열을 받아 $100\text{ km}^2$ 스케일로 엔진을 초기화하고 총 산림 셀 수를 집계합니다.
 
 #### 주요 메서드
 * **`update(dt: number, weather: WeatherConditions): SimulationStats`**
@@ -93,17 +103,28 @@ constructor(initialGrid: TerrainCell[][])
 
 ---
 
-### 2.2 `terrainData.ts` (`src/simulation/terrainData.ts`)
+### 2.2 `wildfireRiskModel.ts` (`src/simulation/wildfireRiskModel.ts`)
+
+#### 주요 인터페이스 및 상수
+* **`WILDFIRE_TRAINING_DATASET: DatasetItem[]`**: 산림청/기상청 실측 기상 100건 데이터셋 (낮음 25건, 보통 25건, 높음 25건, 매우높음 25건).
+
+#### 주요 함수
+* **`predictWildfireRisk(weather: WeatherConditions): RiskPredictionResult`**
+  * k-최근접 이웃(KNN, $k=7$) 및 거리 가중치 역수 모델과 연속 물리 수식을 결합하여 산불 위험 등급(`낮음`, `보통`, `높음`, `매우높음`), 종합 위험 점수($0 \sim 100$), 등급별 확률(%), 물리 확산 배율(`spreadMultiplier`), 화염 세기 배율(`flameIntensityScale`), 비화 계수(`spottingProbabilityFactor`)를 산출합니다.
+
+---
+
+### 2.3 `terrainData.ts` (`src/simulation/terrainData.ts`)
 
 #### 상수
 * `GRID_SIZE`: $128$
-* `WORLD_SIZE`: $1000$ (Three.js 월드 단위 m)
-* `CELL_SPACING`: $WORLD\_SIZE / (GRID\_SIZE - 1) \approx 7.874\text{m}$
-* `MAX_TERRAIN_HEIGHT`: $220\text{m}$
+* `WORLD_SIZE`: $10,000$ (Three.js 월드 단위 m, $10\text{km}$)
+* `CELL_SPACING`: $WORLD\_SIZE / (GRID\_SIZE - 1) \approx 78.74\text{m}$
+* `MAX_TERRAIN_HEIGHT`: $1,450\text{m}$ (백두대간 주봉 고도차)
 
 #### 주요 함수
 * **`generateTerrainData(): { grid, heights, treePositions }`**
-  * 2D Gradient Noise, FBM(Fractional Brownian Motion), Ridged Multifractal Noise 및 도메인 왜곡(Domain Warping)을 조합하여 백두대간 양식의 산악 지형, 7대 주봉, 계곡 및 경사도를 절차적으로 생성합니다.
+  * 2D Gradient Noise, FBM(Fractional Brownian Motion), Ridged Multifractal Noise 및 도메인 왜곡(Domain Warping)을 조합하여 $100\text{ km}^2$ 백두대간 양식의 산악 지형, 7대 주봉, 계곡 및 경사도를 절차적으로 생성합니다.
   * 쌍선형 보간법(Bilinear Interpolation)을 통해 $16,000$개 이상의 수목 위치를 산악 지표면에 밀착 배치합니다.
 
 ---
@@ -142,30 +163,29 @@ Three.js 씬 그래프, 카메라, 렌더러, 조명, 조작계 및 마우스 �
 
 다층 파티클 이펙트(화염, 연기, 불씨)를 관리합니다.
 
-* **`flameColumnsMesh` (InstancedMesh, 500개):**
-  * 십자 형태(Crossed Quads)의 입체 3D 화염 기둥을 화선 주요 지점에 렌더링합니다.
-* **`flameParticles` (Points, 4,200개):**
-  * 지표면에서 솟아오르는 불꽃 파티클을 난류 속도로 방출합니다.
-* **`smokeParticles` (Points, 4,800개):**
-  * 풍속 및 풍향 벡터 방향으로 날아오르며 반투명하게 확산되는 연기 구름을 시뮬레이션합니다.
-* **`emberParticles` (Points, 1,600개):**
-  * 공중으로 흩날리며 깜빡이는 비산 불씨(Sparks)를 연출합니다.
-* **`clear(): void`**
-  * 모든 파티클의 수명을 0으로 리셋합니다.
+* **`flameColumnsMesh` (InstancedMesh, 500개):** 십자 형태(Crossed Quads)의 입체 3D 화염 기둥을 화선 주요 지점에 렌더링.
+* **`flameParticles` (Points, 4,200개):** 지표면에서 솟아오르는 불꽃 파티클을 난류 속도로 방출.
+* **`smokeParticles` (Points, 4,800개):** 풍속 및 풍향 벡터 방향으로 날아오르며 반투명하게 확산되는 연기 구름을 시뮬레이션.
+* **`emberParticles` (Points, 1,600개):** 공중으로 흩날리며 깜빡이는 비산 불씨(Sparks)를 연출.
+* **`clear(): void`** 모든 파티클의 수명을 0으로 리셋.
 
 ---
 
 ## 4. UI 컴포넌트 (`src/components/`)
 
-### 4.1 `FireMetricsOverlay`
-* **역할:** 좌측 상단 실시간 관제 대시보드 HUD.
-* **특징:** 접기/펼치기 토글 기능 지원, 활성 화선 유무에 따른 경보(Alert) 펄스 배지, 화선 수, 피해 면적(ha), 전파 속도(m/min), 소실률(%) 표시.
+### 4.1 `IntegratedControlHub` (`src/components/IntegratedControlHub.tsx`)
+* **역할:** 통합 GIS 재난 관제 콘솔 허브.
+* **구조:**
+  * **상단 글로벌 텔레메트리 바:** 활성 화선 수, 소실 면적(ha 및 km²), 전파 속도(m/min), 경과 시간, 카메라 프리셋, 조명 모드, 뷰포트 전체 화면 토글.
+  * **우측 통합 관제 독 (3개 탭):**
+    1. *기상 제어:* 기온(-10~48℃), 습도(5~100%), 풍속(0~45m/s), 8방위 원터치 풍향, 비화 토글, 4대 대표 기상 프리셋.
+    2. *피해 분석:* AI 종합 위험도 지수 게이지, 4단계 위험 등급 및 확률 분포, 내장 `FireStatsDashboard`.
+    3. *시나리오·DB:* 4대 위기 시나리오 및 산림청 100건 실측 기상 데이터 탐색기(검색/필터/원클릭 발화).
+  * **하단 재생 컨트롤러:** 재생/일시정지, 지형 초기화, 1x~60x 가속 버튼, 실시간 기상 상태 요약 칩.
 
-### 4.2 `SimulationControls`
-* **역할:** 하단 플레이백 제어 및 환경 설정 바.
+### 4.2 `FireStatsDashboard` (`src/components/FireStatsDashboard.tsx`)
+* **역할:** Recharts 기반 실시간 화재 피해 및 화선 추이 시각화 대시보드.
 * **기능:**
-  * 재생/일시정지, 시뮬레이션 초기화, 1x ~ 4x 가속 버튼
-  * 풍향, 풍속, 습도, 기온 슬라이더 조절
-  * 카메라 뷰 프리셋 선택 버튼
-  * 일조 조명 모드(낮/황혼/밤) 전환 토글
-  * 4가지 사전 정의 위기 시나리오(골짜기 강풍, 능선 급상승, 비화 도약, 낙뢰 다중 발화) 원클릭 로딩
+  * 실시간 소실 면적(ha) 누적 증가 곡선 (AreaChart)
+  * 활성 화선 수(개) 변동 추이 선 그래프 (LineChart)
+  * 최근 60초간의 시계열 데이터 자동 슬라이딩 윈도우 갱신

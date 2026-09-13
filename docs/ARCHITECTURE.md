@@ -26,7 +26,10 @@
 ```text
 +-----------------------------------------------------------------------------------+
 |                              1. Presentation Layer                                |
-|  [FireMetricsOverlay] (HUD)                  [SimulationControls] (User Controls) |
+|  [IntegratedControlHub.tsx] (통합 GIS 재난 관제 허브)                              |
+|   ├─ Global Telemetry Header (실시간 화선/면적/속도/카메라/조명/패널 토글)          |
+|   ├─ Right Dock (3-Tab: 기상 제어, 피해 분석 [FireStatsDashboard], 시나리오·DB)   |
+|   └─ Bottom Dock (재생/정지, 리셋, 1x~60x 가속, 실시간 기상 상태 칩)              |
 +-----------------------------------------------------------------------------------+
                                          │ React Props / Callbacks
 +-----------------------------------------------------------------------------------+
@@ -38,20 +41,20 @@
                   │                                            │
                   ▼                                            ▼
 +------------------------------------+       +--------------------------------------+
-|     3. Simulation Engine Layer     |       |       4. 3D WebGL Render Layer       |
-|       (FireSpreadEngine.ts)        |       |        (Three.js Scene Graph)        |
+| 3. Simulation & AI Model Layer     |       |       4. 3D WebGL Render Layer       |
+|  (fireSpreadEngine / wildfireRisk) |       |        (Three.js Scene Graph)        |
 |------------------------------------|       |--------------------------------------|
 | - 128x128 Cellular Automata 격자   |       | - SceneManager.ts (카메라/조명/컨트롤)|
-| - Rothermel 연소 및 확산 물리 수식   | ───▶ | - TerrainMesh.ts (정점 색상/수목)    |
-| - 풍향/경사도/건조도/비화 계산       |       | - FireParticleSystem.ts (불/연기/불씨)|
-| - Active Fire Coordinates 추출     |       | - OrbitControls & Raycaster          |
+| - 100km² 광역 Rothermel 물리 수식  | ───▶ | - TerrainMesh.ts (100km² 지형/수목) |
+| - AI 다변수 산불 위험 예측 지수    |       | - FireParticleSystem.ts (불/연기/불씨)|
+| - KFS 100건 실측 기상 데이터베이스 |       | - OrbitControls & Raycaster          |
 +------------------------------------+       +--------------------------------------+
                   │
                   ▼
 +-----------------------------------------------------------------------------------+
 |                         5. Procedural Geometry & Data                             |
 |                                (terrainData.ts)                                   |
-| - FBM & Ridged Multifractal Noise 지형 고도 (Heights Array)                        |
+| - 10,000m x 10,000m (100 km²) FBM & Ridged Multifractal Noise 지형 (Heights)       |
 | - Bilinear Interpolation 수목 표면 흡착 위치 (16,000+ Trees)                       |
 +-----------------------------------------------------------------------------------+
 ```
@@ -64,27 +67,36 @@
 * Three.js 캔버스 컨테이너를 React 수명 주기(`useEffect`)에 바인딩합니다.
 * `requestAnimationFrame` 루프를 실행하여 매 프레임 경과 시간($dt$)을 계산하고 엔진과 렌더러를 동기화합니다.
 * React 상태(`weather`, `isPlaying`, `speed`)를 `useRef`로 미러링하여 클로저 지연(Stale Closure) 없이 최신 파라미터를 렌더 루프에 공급합니다.
+* 마우스 레이캐스팅 클릭 시 100km² 광역 산악 지형의 해당 지점을 즉시 발화합니다.
 
-### 3.2 `FireSpreadEngine.ts` (산불 시뮬레이션 엔진)
+### 3.2 `FireSpreadEngine.ts` (100km² 산불 시뮬레이션 엔진)
 * $128 \times 128$ 크기의 `TerrainCell[][]` 2차원 배열 상태를 관리합니다.
+* $10\text{km} \times 10\text{km}$ ($100\text{ km}^2$, 10,000 ha) 면적과 1,450m 주봉 고도를 기준으로 격자 간격($\Delta s \approx 78.74\text{m}$)을 계산합니다.
 * 활성 발화 지점 집합(`activeFires: Set<string>`)을 통해 전체 16,384개 셀 중 현재 불타는 셀만 O(1)로 순회하여 연산 효율을 극대화합니다.
 * 매 틱마다 불꽃이 소진된 셀을 `CellStatus.BURNED`로 전이시키고, 이웃 8개 셀로의 발화 확률을 계산하여 확산합니다.
-* 비화(Spotting) 발생 시 풍하측(Downwind) 셀을 무작위 샘플링하여 신규 발화합니다.
+* 1x 실시간부터 최대 60배속(1초당 실제 1분)까지 안정적인 수치 적분을 지원합니다.
+* 비화(Spotting) 발생 시 풍하측(Downwind) 200m~1.5km 범위의 셀을 무작위 샘플링하여 신규 발화합니다.
 
-### 3.3 `SceneManager.ts` (3D 씬 매니저)
+### 3.3 `wildfireRiskModel.ts` (AI 산불 위험 예측 모델 & KFS 데이터셋)
+* 기온($-10\sim 48^\circ\text{C}$), 상대 습도($5\sim 100\%$), 풍속($0\sim 45\text{m/s}$) 복합 인자를 종합 평가하여 0~100점의 산불 종합 위험 지수를 산출합니다.
+* 4단계 등급(`낮음`, `보통`, `높음`, `매우높음`)과 등급별 확률 분포, 물리 확산 배율($\text{spreadMultiplier}$), 화염 세기 배율, 비화 발생 계수를 제공합니다.
+* 산림청(KFS) 실측 기상 데이터 100건을 탑재하여 검색, 필터링, 원클릭 시뮬레이션 발화를 지원합니다.
+
+### 3.4 `SceneManager.ts` (3D 씬 매니저)
 * Three.js의 `PerspectiveCamera`, `WebGLRenderer`, `Scene`, `OrbitControls`를 총괄 관리합니다.
 * 낮(Day), 황혼(Dusk), 밤(Night)에 따른 방향광(DirectionalLight), 환경광(AmbientLight), 안개(Fog) 색상 및 강도를 동적으로 전환합니다.
 * 현재 가장 활발한 화선의 중심 좌표(`fireFrontCenter`)를 3개의 동적 포인트 라이트로 조명하여 실시간 화재 현장감을 연출합니다.
 * 화면 클릭 좌표를 3D 지형 표면 좌표로 변환하는 마우스 레이캐스팅(Raycasting) 및 조준선(Reticle) 렌더링을 처리합니다.
+* 3D 자유 궤도(Orbit), 조감도(Top-Down), 화선 전면 자동 추적(Track Front) 시점 전환을 수행합니다.
 
-### 3.4 `TerrainMesh.ts` (지형 및 수목 렌더러)
-* $128 \times 128$ 정점의 `PlaneGeometry`를 X축 -90도 회전시켜 산악 지형을 구축합니다.
-* `geometry.attributes.color`의 정점 컬러 버퍼를 시뮬레이션 격자의 연소 상태(`CellStatus`)에 맞추어 `needsUpdate = true`로 점진적 탄화 색상을 블렌딩합니다.
-* 16,000여 개의 수목은 단 1개의 `InstancedMesh`로 생성되며, 불에 탄 셀 위에 위치한 수목은 스케일을 축소하고 어둡게 탄화시킵니다.
+### 3.5 `TerrainMesh.ts` (100km² 지형 및 수목 렌더러)
+* $128 \times 128$ 정점의 $10,000\text{m} \times 10,000\text{m}$ 대형 `PlaneGeometry`를 구축합니다.
+* `geometry.attributes.color`의 정점 컬러 버퍼를 시뮬레이션 격자의 연소 상태(`CellStatus`)에 맞추어 점진적 탄화 색상으로 블렌딩합니다.
+* 16,000여 개의 수목은 `InstancedMesh`로 생성되며, 불에 탄 셀 위에 위치한 수목은 스케일을 축소하고 어둡게 탄화시킵니다.
 
-### 3.5 `FireParticleSystem.ts` (화염/연기/불씨 파티클)
+### 3.6 `FireParticleSystem.ts` (화염/연기/불씨 파티클)
 * **십자 쿼드(Crossed Quads) 화염 메쉬:** 500개의 입체 화염 기둥을 `InstancedMesh`로 배치.
-* **화염 파티클 (4,200개):** `THREE.Points` 기반으로 불꽃의 탄생, 상승, 색상 페이드아웃 처리.
+* **볼륨 화염 파티클 (4,200개):** `THREE.Points` 기반으로 불꽃의 탄생, 상승, 색상 페이드아웃 처리.
 * **연기 파티클 (4,800개):** 반투명 텍스처를 사용하여 풍향 벡터를 따라 흩어지는 짙은 연기 기둥 구현.
 * **비산 불씨 (1,600개):** 가벼운 무게와 난류(Turbulence)를 반영하여 공중으로 솟구치는 반딧불이 형태의 파티클.
 
@@ -96,14 +108,14 @@
 
 ```text
 [그리드 좌표계 (Grid)]          [월드 좌표계 (Three.js World)]         [화면 정규화 좌표계 (NDC)]
-  x ∈ [0, 127]                    X ∈ [-500.0, +500.0]                  X_ndc ∈ [-1.0, +1.0]
-  z ∈ [0, 127]                    Y ∈ [0.0, +220.0]                     Y_ndc ∈ [-1.0, +1.0]
-                                  Z ∈ [-500.0, +500.0]
+  x ∈ [0, 127]                    X ∈ [-5000.0, +5000.0]                X_ndc ∈ [-1.0, +1.0]
+  z ∈ [0, 127]                    Y ∈ [0.0, +1450.0]                    Y_ndc ∈ [-1.0, +1.0]
+                                  Z ∈ [-5000.0, +5000.0]
 ```
 
 ### 변환 공식
 1. **그리드 좌표 $\rightarrow$ 월드 좌표:**
-   $$X_{world} = (x_{grid} - 63.5) \times \Delta s \quad (\Delta s = 1000 / 127 \approx 7.87\text{m})$$
+   $$X_{world} = (x_{grid} - 63.5) \times \Delta s \quad (\Delta s = 10000 / 127 \approx 78.74\text{m})$$
    $$Z_{world} = (z_{grid} - 63.5) \times \Delta s$$
 2. **월드 좌표 $\rightarrow$ 그리드 좌표:**
    $$x_{grid} = \text{round}\left(\frac{X_{world}}{\Delta s} + 63.5\right)$$

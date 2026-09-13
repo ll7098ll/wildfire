@@ -1,9 +1,10 @@
-import { CellStatus, FireFrontPoint, RiskLevel, SimulationStats, TerrainCell, WeatherConditions } from '../types';
-import { CELL_SPACING, GRID_SIZE } from './terrainData';
+import { CellStatus, FireFrontPoint, RiskLevel, SimulationStats, TerrainCell, TerrainScaleMode, WeatherConditions } from '../types';
+import { CELL_SPACING, GRID_SIZE, TerrainConfig, getTerrainConfig } from './terrainData';
 import { predictWildfireRisk } from './wildfireRiskModel';
 
 export class FireSpreadEngine {
   private grid: TerrainCell[][];
+  private config: TerrainConfig;
   private activeFires: Set<string> = new Set();
   private burnedCount = 0;
   private totalForestCells = 0;
@@ -12,16 +13,26 @@ export class FireSpreadEngine {
   private spreadSpeedMMin = 0;
   private lastBurnedDelta = 0;
 
-  constructor(initialGrid: TerrainCell[][]) {
+  constructor(initialGrid: TerrainCell[][], config?: TerrainConfig) {
     this.grid = initialGrid;
+    this.config = config || getTerrainConfig('100x');
     this.countTotalForest();
+  }
+
+  public setConfig(config: TerrainConfig) {
+    this.config = config;
+  }
+
+  public getConfig(): TerrainConfig {
+    return this.config;
   }
 
   private countTotalForest() {
     this.totalForestCells = 0;
-    for (let z = 0; z < GRID_SIZE; z++) {
-      for (let x = 0; x < GRID_SIZE; x++) {
-        if (this.grid[z][x].fuel > 0.15) {
+    const size = this.config.gridSize;
+    for (let z = 0; z < size; z++) {
+      for (let x = 0; x < size; x++) {
+        if (this.grid[z]?.[x]?.fuel > 0.15) {
           this.totalForestCells++;
         }
       }
@@ -34,18 +45,20 @@ export class FireSpreadEngine {
 
   public getActiveFireCoordinates(): FireFrontPoint[] {
     const points: FireFrontPoint[] = [];
-    const halfGrid = (GRID_SIZE - 1) / 2;
+    const halfGrid = (this.config.gridSize - 1) / 2;
+    const spacing = this.config.cellSpacing;
+
     for (const key of this.activeFires) {
       const [xStr, zStr] = key.split(',');
       const x = parseInt(xStr, 10);
       const z = parseInt(zStr, 10);
       const cell = this.grid[z]?.[x];
       if (cell && (cell.status === CellStatus.BURNING || cell.status === CellStatus.IGNITING)) {
-        const worldX = (x - halfGrid) * CELL_SPACING;
-        const worldZ = (z - halfGrid) * CELL_SPACING;
+        const worldX = (x - halfGrid) * spacing;
+        const worldZ = (z - halfGrid) * spacing;
         points.push({
           x: worldX,
-          y: cell.height + 0.6,
+          y: cell.height + (this.config.scaleMode === '100x' ? 3.5 : 0.6),
           z: worldZ,
           intensity: cell.temperature,
         });
@@ -60,11 +73,12 @@ export class FireSpreadEngine {
 
   public ignite(gridX: number, gridZ: number, radius = 1): number {
     let ignitedCount = 0;
+    const size = this.config.gridSize;
     for (let dz = -radius; dz <= radius; dz++) {
       for (let dx = -radius; dx <= radius; dx++) {
         const nx = gridX + dx;
         const nz = gridZ + dz;
-        if (nx >= 0 && nx < GRID_SIZE && nz >= 0 && nz < GRID_SIZE) {
+        if (nx >= 0 && nx < size && nz >= 0 && nz < size) {
           const cell = this.grid[nz][nx];
           if (cell.status === CellStatus.UNBURNED && cell.fuel > 0.05) {
             cell.status = CellStatus.BURNING;
@@ -80,10 +94,12 @@ export class FireSpreadEngine {
   }
 
   public igniteWorld(worldX: number, worldZ: number, radius = 2): number {
-    const halfGrid = (GRID_SIZE - 1) / 2;
-    const gx = Math.round(worldX / CELL_SPACING + halfGrid);
-    const gz = Math.round(worldZ / CELL_SPACING + halfGrid);
-    if (gx >= 0 && gx < GRID_SIZE && gz >= 0 && gz < GRID_SIZE) {
+    const size = this.config.gridSize;
+    const halfGrid = (size - 1) / 2;
+    const spacing = this.config.cellSpacing;
+    const gx = Math.round(worldX / spacing + halfGrid);
+    const gz = Math.round(worldZ / spacing + halfGrid);
+    if (gx >= 0 && gx < size && gz >= 0 && gz < size) {
       return this.ignite(gx, gz, radius);
     }
     return 0;
@@ -103,38 +119,34 @@ export class FireSpreadEngine {
       return 0;
     }
 
-    // 1. Base fuel & moisture factor
-    // Dryness factor: humidity 10% -> 0.95, 80% -> 0.3
-    const dryness = Math.max(0.12, (100 - weather.humidity * 0.88) / 100);
-    const tempFactor = Math.min(1.8, Math.max(0.6, weather.temperature / 24));
-    const baseRate = 0.15 * target.fuel * dryness * tempFactor * spreadMultiplier;
+    // 1. Base fuel & moisture factor (extended ranges: Temp -10~48°C, Hum 5~100%)
+    const dryness = Math.max(0.08, (105 - weather.humidity * 0.95) / 100);
+    const tempFactor = Math.min(2.2, Math.max(0.4, 0.65 + (weather.temperature + 10) * 0.025));
+    const baseRate = 0.14 * target.fuel * dryness * tempFactor * spreadMultiplier;
 
-    // 2. Wind effect
-    // Convert wind angle (degrees, 0 is blowing toward -Z North)
+    // 2. Wind effect (extended range: 0 to 45 m/s)
     const windRad = (weather.wind.direction * Math.PI) / 180;
     const windDirX = Math.sin(windRad);
     const windDirZ = -Math.cos(windRad);
 
-    // Vector from source to target
-    const propDirX = (dx * CELL_SPACING) / dist;
-    const propDirZ = (dz * CELL_SPACING) / dist;
+    const spacing = this.config.cellSpacing;
+    const propDirX = (dx * spacing) / dist;
+    const propDirZ = (dz * spacing) / dist;
 
     // Dot product between wind vector and fire propagation vector
     const windAlignment = windDirX * propDirX + windDirZ * propDirZ; // -1 to 1
 
-    // Wind speed coefficient (0 to 25 m/s)
     const wSpeed = weather.wind.speed;
     let windFactor = 1.0;
     if (windAlignment > 0) {
-      // Wind blowing fire forward: strong propagation boost along wind direction
-      windFactor = 1.0 + Math.pow(wSpeed / 4.2, 1.3) * windAlignment * (2.2 * Math.min(2.0, spreadMultiplier));
+      // Wind blowing fire forward (Yangganjipung and severe gales up to 45 m/s)
+      windFactor = 1.0 + Math.pow(wSpeed / 3.8, 1.35) * windAlignment * (1.85 * Math.min(2.5, spreadMultiplier));
     } else {
-      // Backwind resists fire spread but doesn't completely halt it
-      windFactor = Math.max(0.18, 1.0 / (1.0 + (wSpeed / 6) * Math.abs(windAlignment)));
+      // Backwind resists fire spread
+      windFactor = Math.max(0.10, 1.0 / (1.0 + (wSpeed / 4.8) * Math.abs(windAlignment)));
     }
 
     // 3. Slope effect (crucial for mountainous wildfire!)
-    // Uphill fire spreads drastically faster because convection preheats vegetation above
     const deltaHeight = target.height - source.height;
     const slopeTan = deltaHeight / dist; // positive = uphill, negative = downhill
     let slopeFactor = 1.0;
@@ -156,6 +168,10 @@ export class FireSpreadEngine {
     const newlyIgnited: Array<{ x: number; z: number }> = [];
     const extinguished: string[] = [];
 
+    const spacing = this.config.cellSpacing;
+    const size = this.config.gridSize;
+    const is100x = this.config.scaleMode === '100x';
+
     // Evaluate AI Risk Profile from real weather values
     const aiRisk = predictWildfireRisk(weather.temperature, weather.humidity, weather.wind.speed);
     const spreadMult = aiRisk.spreadMultiplier;
@@ -168,14 +184,14 @@ export class FireSpreadEngine {
     let peakIntensity = 0;
 
     const neighbors = [
-      { dx: -1, dz: 0, dist: CELL_SPACING },
-      { dx: 1, dz: 0, dist: CELL_SPACING },
-      { dx: 0, dz: -1, dist: CELL_SPACING },
-      { dx: 0, dz: 1, dist: CELL_SPACING },
-      { dx: -1, dz: -1, dist: CELL_SPACING * 1.414 },
-      { dx: 1, dz: -1, dist: CELL_SPACING * 1.414 },
-      { dx: -1, dz: 1, dist: CELL_SPACING * 1.414 },
-      { dx: 1, dz: 1, dist: CELL_SPACING * 1.414 },
+      { dx: -1, dz: 0, dist: spacing },
+      { dx: 1, dz: 0, dist: spacing },
+      { dx: 0, dz: -1, dist: spacing },
+      { dx: 0, dz: 1, dist: spacing },
+      { dx: -1, dz: -1, dist: spacing * 1.414 },
+      { dx: 1, dz: -1, dist: spacing * 1.414 },
+      { dx: -1, dz: 1, dist: spacing * 1.414 },
+      { dx: 1, dz: 1, dist: spacing * 1.414 },
     ];
 
     for (const key of this.activeFires) {
@@ -186,13 +202,13 @@ export class FireSpreadEngine {
       if (!cell) continue;
 
       fireCount++;
-      const wx = (x - GRID_SIZE / 2) * CELL_SPACING;
-      const wz = (z - GRID_SIZE / 2) * CELL_SPACING;
+      const wx = (x - size / 2) * spacing;
+      const wz = (z - size / 2) * spacing;
       sumX += wx;
       sumY += cell.height;
       sumZ += wz;
 
-      // Update burning progress (burn rate accelerates under extreme risk, burns slower in damp conditions)
+      // Update burning progress
       const burnSpeed = (0.05 + weather.wind.speed * 0.0016) * dt * (0.6 + spreadMult * 0.4);
       cell.burnProgress += burnSpeed;
 
@@ -223,32 +239,32 @@ export class FireSpreadEngine {
       for (const n of neighbors) {
         const nx = x + n.dx;
         const nz = z + n.dz;
-        if (nx < 0 || nx >= GRID_SIZE || nz < 0 || nz >= GRID_SIZE) continue;
+        if (nx < 0 || nx >= size || nz < 0 || nz >= size) continue;
 
         const target = this.grid[nz][nx];
         if (target.status === CellStatus.UNBURNED) {
           const prob = this.calculateSpreadProbability(cell, target, n.dx, n.dz, n.dist, weather, spreadMult);
-          // Exponential chance to ignite per frame: dynamically scaled with AI spreadMultiplier
-          const ignitionProb = 1.0 - Math.exp(-prob * dt * 4.5);
+          // Scale propagation rate so mountain simulation remains brisk and visually captivating
+          const scaleBoost = is100x ? 5.2 : 4.5;
+          const ignitionProb = 1.0 - Math.exp(-prob * dt * scaleBoost);
           if (Math.random() < ignitionProb) {
             newlyIgnited.push({ x: nx, z: nz });
           }
         }
       }
 
-      // Spotting fire (비화 현상): 강풍 + 고위험 상태에서 불씨가 멀리 날아가 신규 발화
-      const canSpot = weather.spottingEnabled && spottingMult > 0 && (weather.wind.speed > 6 || aiRisk.level === '매우높음');
-      if (canSpot && Math.random() < 0.006 * dt * (weather.wind.speed / 8) * spottingMult) {
+      // Spotting fire (비화 현상): 강풍 + 고위험 상태에서 불씨가 수백 미터~1.5km 날아가 신규 발화
+      const canSpot = weather.spottingEnabled && spottingMult > 0 && (weather.wind.speed > 5.5 || aiRisk.level === '매우높음');
+      if (canSpot && Math.random() < 0.0075 * dt * (weather.wind.speed / 8) * spottingMult) {
         const windRad = (weather.wind.direction * Math.PI) / 180;
-        // Spotting throw distance scales with risk level
-        const maxDist = aiRisk.level === '매우높음' ? weather.wind.speed * 0.7 : weather.wind.speed * 0.35;
+        const maxDist = Math.min(22, weather.wind.speed * 0.52);
         const throwDist = 2 + Math.floor(Math.random() * maxDist);
         const spotX = x + Math.round(Math.sin(windRad) * throwDist + (Math.random() - 0.5) * 3);
         const spotZ = z + Math.round(-Math.cos(windRad) * throwDist + (Math.random() - 0.5) * 3);
 
-        if (spotX >= 0 && spotX < GRID_SIZE && spotZ >= 0 && spotZ < GRID_SIZE) {
+        if (spotX >= 0 && spotX < size && spotZ >= 0 && spotZ < size) {
           const spotTarget = this.grid[spotZ][spotX];
-          if (spotTarget.status === CellStatus.UNBURNED && spotTarget.fuel > 0.12) {
+          if (spotTarget.status === CellStatus.UNBURNED && spotTarget.fuel > 0.10) {
             newlyIgnited.push({ x: spotX, z: spotZ });
           }
         }
@@ -275,35 +291,56 @@ export class FireSpreadEngine {
     if (fireCount > 0) {
       this.fireFrontCenter = {
         x: sumX / fireCount,
-        y: sumY / fireCount + 3,
+        y: sumY / fireCount + 25,
         z: sumZ / fireCount,
       };
     }
 
-    // Calculate spread velocity (m/min)
+    // Physical forward Rate of Spread (m/min) calibrated to Rothermel wildfire model
     const currentDelta = newlyIgnited.length;
     this.lastBurnedDelta = this.lastBurnedDelta * 0.85 + currentDelta * 0.15;
-    this.spreadSpeedMMin = Math.round(this.lastBurnedDelta * CELL_SPACING * 6.5);
 
-    // Physical area calculation (1 ha = 10,000 m²)
-    const cellAreaHa = (CELL_SPACING * CELL_SPACING) / 10000;
+    if (fireCount > 0) {
+      const dryness = Math.max(0.08, (105 - weather.humidity * 0.95) / 100);
+      const tempFactor = Math.min(2.2, Math.max(0.4, 0.65 + (weather.temperature + 10) * 0.025));
+      const baseROS = 1.4 * (dryness * 1.25) * tempFactor * spreadMult; // ~1.5 m/min in calm
+      const windBoost = Math.pow(weather.wind.speed / 3.4, 1.28) * 1.5;
+      const theoreticalROS = baseROS * (1.0 + windBoost);
+      const empiricalROS = (this.lastBurnedDelta * spacing * 60) / Math.max(dt, 0.1);
+      const blendedROS = empiricalROS > 0 ? (theoreticalROS * 0.45 + Math.min(empiricalROS, theoreticalROS * 2.2) * 0.55) : theoreticalROS;
+      this.spreadSpeedMMin = Math.round(blendedROS * 10) / 10;
+    } else {
+      this.spreadSpeedMMin = 0;
+    }
+
+    // Physical area calculation (1 ha = 10,000 m², 1 km² = 1,000,000 m² = 100 ha)
+    // 100x mountain scale: 10km x 10km = 100 km² = 10,000 ha
+    const cellAreaHa = (spacing * spacing) / 10000;
     const burnedAreaHa = Math.round(this.burnedCount * cellAreaHa * 10) / 10;
     const totalForestHa = Math.round(this.totalForestCells * cellAreaHa * 10) / 10;
+    const burnedAreaKm2 = Math.round((burnedAreaHa / 100) * 100) / 100;
+    const totalAreaKm2 = 100.0;
     const burnedPercentage = this.totalForestCells > 0 ? Math.min(100, Math.round((this.burnedCount / this.totalForestCells) * 100)) : 0;
 
     return {
       activeFires: this.activeFires.size,
       burnedAreaHa,
+      burnedAreaKm2,
       totalForestHa,
+      totalAreaKm2,
       burnedPercentage,
       spreadRateMMin: this.spreadSpeedMMin,
       elapsedSeconds: Math.round(this.elapsedSeconds),
       peakIntensity,
+      scaleMode: '100x',
     };
   }
 
-  public reset(newGrid: TerrainCell[][]) {
+  public reset(newGrid: TerrainCell[][], newConfig?: TerrainConfig) {
     this.grid = newGrid;
+    if (newConfig) {
+      this.config = newConfig;
+    }
     this.activeFires.clear();
     this.burnedCount = 0;
     this.elapsedSeconds = 0;

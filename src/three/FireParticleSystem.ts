@@ -1,17 +1,19 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { FireFrontPoint, WeatherConditions } from '../types';
+import { FireFrontPoint, TerrainScaleMode, WeatherConditions } from '../types';
 import { predictWildfireRisk } from '../simulation/wildfireRiskModel';
 
 export class FireParticleSystem {
   public group: THREE.Group;
+  private scaleMultiplier = 7.0; // 7.0 for 100x scale (10,000m world), 1.0 for 1x scale
 
   // 1. 3D Flame Column Meshes (입체 화염 메쉬 - 십자 빌보드)
   private flameColumnsMesh: THREE.InstancedMesh;
-  private maxColumns = 500;
+  private maxColumns = 200;
   private dummyMatrix = new THREE.Matrix4();
   private dummyColor = new THREE.Color();
   private flameTime = 0;
+  private wasIdle = true;
 
   // 2. Volumetric Flame Particles
   private flameParticles: THREE.Points;
@@ -20,7 +22,7 @@ export class FireParticleSystem {
   private flameColors: Float32Array;
   private flameVelocities: Float32Array;
   private flameLifes: Float32Array;
-  private maxFlames = 4200;
+  private maxFlames = 2000;
 
   // 3. Smoke Particles
   private smokeParticles: THREE.Points;
@@ -28,7 +30,7 @@ export class FireParticleSystem {
   private smokePositions: Float32Array;
   private smokeVelocities: Float32Array;
   private smokeLifes: Float32Array;
-  private maxSmoke = 4800;
+  private maxSmoke = 2200;
 
   // 4. Embers / Sparks
   private emberParticles: THREE.Points;
@@ -36,9 +38,9 @@ export class FireParticleSystem {
   private emberPositions: Float32Array;
   private emberVelocities: Float32Array;
   private emberLifes: Float32Array;
-  private maxEmbers = 1600;
+  private maxEmbers = 800;
 
-  constructor() {
+  constructor(scaleMode: TerrainScaleMode = '100x') {
     this.group = new THREE.Group();
 
     // 1. Generate procedural particle textures
@@ -148,6 +150,21 @@ export class FireParticleSystem {
     });
     this.emberParticles = new THREE.Points(this.emberGeo, emberMat);
     this.group.add(this.emberParticles);
+
+    this.setScaleMode(scaleMode);
+  }
+
+  public setScaleMode(scaleMode: TerrainScaleMode = '100x') {
+    this.scaleMultiplier = 7.5;
+    if (this.flameParticles?.material) {
+      (this.flameParticles.material as THREE.PointsMaterial).size = 280.0;
+    }
+    if (this.smokeParticles?.material) {
+      (this.smokeParticles.material as THREE.PointsMaterial).size = 680.0;
+    }
+    if (this.emberParticles?.material) {
+      (this.emberParticles.material as THREE.PointsMaterial).size = 44.0;
+    }
   }
 
   private createFlameTexture(): THREE.CanvasTexture {
@@ -211,40 +228,48 @@ export class FireParticleSystem {
   }
 
   public update(dt: number, firePoints: FireFrontPoint[], weather: WeatherConditions) {
+    const hasFires = firePoints.length > 0;
+
+    // Fast-path: When no fires are active and system has settled to idle, skip completely
+    if (!hasFires && this.wasIdle) {
+      return;
+    }
+
     this.flameTime += dt;
     const windRad = (weather.wind.direction * Math.PI) / 180;
     const windDirX = Math.sin(windRad) * (weather.wind.speed * 0.25);
     const windDirZ = -Math.cos(windRad) * (weather.wind.speed * 0.25);
 
-    const hasFires = firePoints.length > 0;
     const aiRisk = predictWildfireRisk(weather.temperature, weather.humidity, weather.wind.speed);
     const flameScale = aiRisk.flameIntensityScale;
 
     // 1. UPDATE 3D FLAME COLUMN MESHES
     const numColumns = Math.min(this.maxColumns, firePoints.length);
-    for (let i = 0; i < this.maxColumns; i++) {
-      if (i < numColumns) {
-        const p = firePoints[i];
-        // Dynamic flame flicker & thermal stretch scaled by AI risk
-        const flicker = 0.8 + 0.35 * Math.sin(this.flameTime * 14 + i * 2.1) + 0.15 * Math.cos(this.flameTime * 22 + i);
-        const scaleX = (1.0 + p.intensity * 0.6) * flicker * Math.sqrt(flameScale);
-        const scaleY = (1.2 + p.intensity * 1.6) * flicker * flameScale;
-        const scaleZ = (1.0 + p.intensity * 0.6) * flicker * Math.sqrt(flameScale);
+    if (numColumns > 0 || !this.wasIdle) {
+      for (let i = 0; i < this.maxColumns; i++) {
+        if (i < numColumns) {
+          const p = firePoints[i];
+          // Dynamic flame flicker & thermal stretch scaled by AI risk & world scale
+          const flicker = 0.8 + 0.35 * Math.sin(this.flameTime * 14 + i * 2.1) + 0.15 * Math.cos(this.flameTime * 22 + i);
+          const scaleX = (1.0 + p.intensity * 0.6) * flicker * Math.sqrt(flameScale) * this.scaleMultiplier;
+          const scaleY = (1.2 + p.intensity * 1.6) * flicker * flameScale * (this.scaleMultiplier * 1.15);
+          const scaleZ = (1.0 + p.intensity * 0.6) * flicker * Math.sqrt(flameScale) * this.scaleMultiplier;
 
-        // Lean slightly with wind
-        const tiltX = windDirX * 0.08;
-        const tiltZ = windDirZ * 0.08;
+          // Lean slightly with wind
+          const tiltX = windDirX * 0.08 * this.scaleMultiplier;
+          const tiltZ = windDirZ * 0.08 * this.scaleMultiplier;
 
-        this.dummyMatrix.makeRotationY(this.flameTime * 1.2 + i * 0.5);
-        this.dummyMatrix.scale(new THREE.Vector3(scaleX, scaleY, scaleZ));
-        this.dummyMatrix.setPosition(p.x + tiltX * 2, p.y + 0.3, p.z + tiltZ * 2);
-        this.flameColumnsMesh.setMatrixAt(i, this.dummyMatrix);
-      } else {
-        this.dummyMatrix.makeTranslation(0, -1000, 0);
-        this.flameColumnsMesh.setMatrixAt(i, this.dummyMatrix);
+          this.dummyMatrix.makeRotationY(this.flameTime * 1.2 + i * 0.5);
+          this.dummyMatrix.scale(new THREE.Vector3(scaleX, scaleY, scaleZ));
+          this.dummyMatrix.setPosition(p.x + tiltX * 2, p.y + 0.3, p.z + tiltZ * 2);
+          this.flameColumnsMesh.setMatrixAt(i, this.dummyMatrix);
+        } else {
+          this.dummyMatrix.makeTranslation(0, -1000, 0);
+          this.flameColumnsMesh.setMatrixAt(i, this.dummyMatrix);
+        }
       }
+      this.flameColumnsMesh.instanceMatrix.needsUpdate = true;
     }
-    this.flameColumnsMesh.instanceMatrix.needsUpdate = true;
 
     // 2. UPDATE VOLUMETRIC FLAME PARTICLES
     let flameSpawnIndex = 0;
@@ -253,9 +278,9 @@ export class FireParticleSystem {
         this.flameLifes[i] -= dt * (1.6 + Math.random() * 0.6);
 
         // Movement: rapid rise + wind drift + thermal turbulence
-        this.flamePositions[i * 3] += (this.flameVelocities[i * 3] + windDirX * 0.5) * dt;
+        this.flamePositions[i * 3] += (this.flameVelocities[i * 3] + windDirX * 0.5 * this.scaleMultiplier) * dt;
         this.flamePositions[i * 3 + 1] += this.flameVelocities[i * 3 + 1] * dt;
-        this.flamePositions[i * 3 + 2] += (this.flameVelocities[i * 3 + 2] + windDirZ * 0.5) * dt;
+        this.flamePositions[i * 3 + 2] += (this.flameVelocities[i * 3 + 2] + windDirZ * 0.5 * this.scaleMultiplier) * dt;
 
         // Color transition over particle lifespan
         const lifeNorm = Math.max(0, this.flameLifes[i]);
@@ -285,13 +310,13 @@ export class FireParticleSystem {
         const p = firePoints[flameSpawnIndex % firePoints.length];
         flameSpawnIndex += 1;
 
-        this.flamePositions[i * 3] = p.x + (Math.random() - 0.5) * 2.8 * flameScale;
-        this.flamePositions[i * 3 + 1] = p.y + Math.random() * 1.5;
-        this.flamePositions[i * 3 + 2] = p.z + (Math.random() - 0.5) * 2.8 * flameScale;
+        this.flamePositions[i * 3] = p.x + (Math.random() - 0.5) * 3.5 * this.scaleMultiplier;
+        this.flamePositions[i * 3 + 1] = p.y + Math.random() * 2.0 * this.scaleMultiplier;
+        this.flamePositions[i * 3 + 2] = p.z + (Math.random() - 0.5) * 3.5 * this.scaleMultiplier;
 
-        this.flameVelocities[i * 3] = (Math.random() - 0.5) * 2.0;
-        this.flameVelocities[i * 3 + 1] = (3.5 + Math.random() * 4.5) * Math.sqrt(flameScale); // Updraft
-        this.flameVelocities[i * 3 + 2] = (Math.random() - 0.5) * 2.0;
+        this.flameVelocities[i * 3] = (Math.random() - 0.5) * 2.0 * Math.sqrt(this.scaleMultiplier);
+        this.flameVelocities[i * 3 + 1] = (3.5 + Math.random() * 4.5) * Math.sqrt(flameScale) * Math.sqrt(this.scaleMultiplier); // Updraft
+        this.flameVelocities[i * 3 + 2] = (Math.random() - 0.5) * 2.0 * Math.sqrt(this.scaleMultiplier);
 
         this.flameLifes[i] = (0.55 + Math.random() * 0.5) * Math.min(1.5, flameScale);
       }
@@ -306,13 +331,13 @@ export class FireParticleSystem {
         this.smokeLifes[i] -= dt * 0.22; // Smoke persists long, building massive plume
 
         // Smoke climbs high and billows far downwind
-        this.smokePositions[i * 3] += (this.smokeVelocities[i * 3] + windDirX * 1.4) * dt;
+        this.smokePositions[i * 3] += (this.smokeVelocities[i * 3] + windDirX * 1.5 * this.scaleMultiplier) * dt;
         this.smokePositions[i * 3 + 1] += this.smokeVelocities[i * 3 + 1] * dt;
-        this.smokePositions[i * 3 + 2] += (this.smokeVelocities[i * 3 + 2] + windDirZ * 1.4) * dt;
+        this.smokePositions[i * 3 + 2] += (this.smokeVelocities[i * 3 + 2] + windDirZ * 1.5 * this.scaleMultiplier) * dt;
 
         // Dispersion turbulence
-        this.smokeVelocities[i * 3] += (Math.random() - 0.5) * 0.25 * dt;
-        this.smokeVelocities[i * 3 + 2] += (Math.random() - 0.5) * 0.25 * dt;
+        this.smokeVelocities[i * 3] += (Math.random() - 0.5) * 0.35 * Math.sqrt(this.scaleMultiplier) * dt;
+        this.smokeVelocities[i * 3 + 2] += (Math.random() - 0.5) * 0.35 * Math.sqrt(this.scaleMultiplier) * dt;
 
         if (this.smokeLifes[i] <= 0) {
           this.smokePositions[i * 3 + 1] = -1000;
@@ -321,18 +346,40 @@ export class FireParticleSystem {
         const p = firePoints[smokeSpawnIndex % firePoints.length];
         smokeSpawnIndex += 1;
 
-        this.smokePositions[i * 3] = p.x + (Math.random() - 0.5) * 3.5;
-        this.smokePositions[i * 3 + 1] = p.y + 3.0 + Math.random() * 3.0;
-        this.smokePositions[i * 3 + 2] = p.z + (Math.random() - 0.5) * 3.5;
+        this.smokePositions[i * 3] = p.x + (Math.random() - 0.5) * 4.5 * this.scaleMultiplier;
+        this.smokePositions[i * 3 + 1] = p.y + (3.0 + Math.random() * 4.0) * this.scaleMultiplier;
+        this.smokePositions[i * 3 + 2] = p.z + (Math.random() - 0.5) * 4.5 * this.scaleMultiplier;
 
-        this.smokeVelocities[i * 3] = (Math.random() - 0.5) * 2.0;
-        this.smokeVelocities[i * 3 + 1] = (4.0 + Math.random() * 4.5) * Math.sqrt(flameScale); // High atmospheric climb
-        this.smokeVelocities[i * 3 + 2] = (Math.random() - 0.5) * 2.0;
+        this.smokeVelocities[i * 3] = (Math.random() - 0.5) * 2.0 * Math.sqrt(this.scaleMultiplier);
+        this.smokeVelocities[i * 3 + 1] = (4.5 + Math.random() * 5.5) * Math.sqrt(flameScale) * Math.sqrt(this.scaleMultiplier); // High atmospheric climb
+        this.smokeVelocities[i * 3 + 2] = (Math.random() - 0.5) * 2.0 * Math.sqrt(this.scaleMultiplier);
 
         this.smokeLifes[i] = 1.0;
       }
     }
     (this.smokeGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+
+    // Adapt smoke visual appearance dynamically based on risk level
+    const smokeMat = this.smokeParticles.material as THREE.PointsMaterial;
+    const baseSmokeSize = this.scaleMultiplier > 2 ? 620.0 : 110.0;
+    if (aiRisk.level === '낮음') {
+      smokeMat.color.setHex(0xb4b9be); // Light pale white smoke for moist/smoldering conditions
+      smokeMat.opacity = 0.28;
+      smokeMat.size = baseSmokeSize * 0.72;
+    } else if (aiRisk.level === '보통') {
+      smokeMat.color.setHex(0x6b6661); // Medium gray smoke
+      smokeMat.opacity = 0.48;
+      smokeMat.size = baseSmokeSize * 0.95;
+    } else if (aiRisk.level === '높음') {
+      smokeMat.color.setHex(0x3a332d); // Dark brownish-black thick smoke
+      smokeMat.opacity = 0.65;
+      smokeMat.size = baseSmokeSize * 1.25;
+    } else {
+      // 매우높음
+      smokeMat.color.setHex(0x1a1512); // Pitch-black catastrophic pyro-convective plume
+      smokeMat.opacity = 0.82;
+      smokeMat.size = baseSmokeSize * 1.55;
+    }
 
     // 4. UPDATE EMBERS / SPARKS
     let emberSpawnIndex = 0;
@@ -341,11 +388,11 @@ export class FireParticleSystem {
       if (this.emberLifes[i] > 0) {
         this.emberLifes[i] -= dt * 0.75;
 
-        this.emberPositions[i * 3] += (this.emberVelocities[i * 3] + windDirX * 2.4) * dt;
+        this.emberPositions[i * 3] += (this.emberVelocities[i * 3] + windDirX * 2.4 * this.scaleMultiplier) * dt;
         this.emberPositions[i * 3 + 1] += this.emberVelocities[i * 3 + 1] * dt;
-        this.emberPositions[i * 3 + 2] += (this.emberVelocities[i * 3 + 2] + windDirZ * 2.4) * dt;
+        this.emberPositions[i * 3 + 2] += (this.emberVelocities[i * 3 + 2] + windDirZ * 2.4 * this.scaleMultiplier) * dt;
 
-        this.emberVelocities[i * 3 + 1] -= dt * 3.0; // Gravity
+        this.emberVelocities[i * 3 + 1] -= dt * 3.0 * Math.sqrt(this.scaleMultiplier); // Gravity
 
         if (this.emberLifes[i] <= 0) {
           this.emberPositions[i * 3 + 1] = -1000;
@@ -354,18 +401,26 @@ export class FireParticleSystem {
         const p = firePoints[emberSpawnIndex % firePoints.length];
         emberSpawnIndex += 1;
 
-        this.emberPositions[i * 3] = p.x + (Math.random() - 0.5) * 2.0;
-        this.emberPositions[i * 3 + 1] = p.y + 2.0 + Math.random() * 2.0;
-        this.emberPositions[i * 3 + 2] = p.z + (Math.random() - 0.5) * 2.0;
+        this.emberPositions[i * 3] = p.x + (Math.random() - 0.5) * 3.0 * this.scaleMultiplier;
+        this.emberPositions[i * 3 + 1] = p.y + (2.0 + Math.random() * 3.0) * this.scaleMultiplier;
+        this.emberPositions[i * 3 + 2] = p.z + (Math.random() - 0.5) * 3.0 * this.scaleMultiplier;
 
-        this.emberVelocities[i * 3] = (Math.random() - 0.5) * 5.0;
-        this.emberVelocities[i * 3 + 1] = (6.0 + Math.random() * 8.0) * aiRisk.spottingProbabilityFactor; // Violent updraft eruption
-        this.emberVelocities[i * 3 + 2] = (Math.random() - 0.5) * 5.0;
+        this.emberVelocities[i * 3] = (Math.random() - 0.5) * 5.0 * Math.sqrt(this.scaleMultiplier);
+        this.emberVelocities[i * 3 + 1] = (6.0 + Math.random() * 8.0) * aiRisk.spottingProbabilityFactor * Math.sqrt(this.scaleMultiplier); // Violent updraft eruption
+        this.emberVelocities[i * 3 + 2] = (Math.random() - 0.5) * 5.0 * Math.sqrt(this.scaleMultiplier);
 
         this.emberLifes[i] = (0.8 + Math.random() * 0.9) * Math.min(1.4, aiRisk.spottingProbabilityFactor);
       }
     }
     (this.emberGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+
+    // Check if system has settled back to complete idle
+    let totalLiving = flameSpawnIndex + smokeSpawnIndex + emberSpawnIndex;
+    if (!hasFires && totalLiving === 0) {
+      this.wasIdle = true;
+    } else {
+      this.wasIdle = false;
+    }
   }
 
   public clear() {
@@ -373,6 +428,7 @@ export class FireParticleSystem {
   }
 
   public reset() {
+    this.wasIdle = true;
     for (let i = 0; i < this.maxColumns; i++) {
       this.dummyMatrix.makeTranslation(0, -1000, 0);
       this.flameColumnsMesh.setMatrixAt(i, this.dummyMatrix);

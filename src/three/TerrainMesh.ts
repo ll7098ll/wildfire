@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { CellStatus, TerrainCell } from '../types';
-import { CELL_SPACING, GRID_SIZE, MAX_TERRAIN_HEIGHT, WORLD_SIZE } from '../simulation/terrainData';
+import { DEFAULT_TERRAIN_CONFIG, TerrainConfig } from '../simulation/terrainData';
 
 export class TerrainMesh {
   public group: THREE.Group;
   public terrainMesh: THREE.Mesh;
+  public config: TerrainConfig;
   private geometry: THREE.PlaneGeometry;
   private colorsAttr: THREE.BufferAttribute;
   private treeMesh: THREE.InstancedMesh;
@@ -26,16 +27,25 @@ export class TerrainMesh {
   private colorAsh = new THREE.Color(0x44403e);
   private tempColor = new THREE.Color();
 
+  private baseColors: Float32Array;
+  private cellStatus: Uint8Array;
+  private treesByCell: number[][];
+  private treeStates: Uint8Array; // 0: unburned, 1: burning, 2: burned
+
   constructor(
     grid: TerrainCell[][],
     heights: Float32Array,
-    treePositions: { x: number; y: number; z: number; scale: number; gridX: number; gridZ: number }[]
+    treePositions: { x: number; y: number; z: number; scale: number; gridX: number; gridZ: number }[],
+    config: TerrainConfig = DEFAULT_TERRAIN_CONFIG
   ) {
     this.group = new THREE.Group();
     this.treeData = treePositions;
+    this.config = config;
+
+    const { worldSize, gridSize, maxHeight } = config;
 
     // 1. Terrain Geometry
-    this.geometry = new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE, GRID_SIZE - 1, GRID_SIZE - 1);
+    this.geometry = new THREE.PlaneGeometry(worldSize, worldSize, gridSize - 1, gridSize - 1);
     this.geometry.rotateX(-Math.PI / 2);
 
     const posAttr = this.geometry.attributes.position;
@@ -43,9 +53,9 @@ export class TerrainMesh {
 
     // Apply elevation and realistic mountain biome & slope coloration
     for (let i = 0; i < posAttr.count; i++) {
-      const x = i % GRID_SIZE;
-      const z = Math.floor(i / GRID_SIZE);
-      const h = heights[z * GRID_SIZE + x] || 0;
+      const x = i % gridSize;
+      const z = Math.floor(i / gridSize);
+      const h = heights[z * gridSize + x] || 0;
       const cell = grid[z]?.[x];
       const slope = cell ? Math.hypot(cell.slopeX, cell.slopeZ) : 0;
 
@@ -53,13 +63,17 @@ export class TerrainMesh {
       posAttr.setY(i, h);
 
       // Height and slope-based alpine coloration
-      const normH = h / MAX_TERRAIN_HEIGHT;
+      const normH = h / maxHeight;
       const col = this.getTerrainColor(normH, slope);
 
       vertexColors[i * 3] = col.r;
       vertexColors[i * 3 + 1] = col.g;
       vertexColors[i * 3 + 2] = col.b;
     }
+
+    // Cache immutable base unburned colors to prevent recalculations
+    this.baseColors = new Float32Array(vertexColors);
+    this.cellStatus = new Uint8Array(gridSize * gridSize);
 
     posAttr.needsUpdate = true;
     this.geometry.setAttribute('color', new THREE.BufferAttribute(vertexColors, 3));
@@ -86,11 +100,26 @@ export class TerrainMesh {
 
     this.treeMesh = new THREE.InstancedMesh(treeGeo, treeMat, treePositions.length);
     this.treeMesh.castShadow = true;
-    this.treeMesh.receiveShadow = true;
+    // Optimize GPU fill-rate: trees do not need to receive self-shadows
+    this.treeMesh.receiveShadow = false;
+
+    // Index trees by grid cell for instant O(1) lookups
+    const totalCells = gridSize * gridSize;
+    this.treesByCell = new Array(totalCells);
+    for (let i = 0; i < totalCells; i++) {
+      this.treesByCell[i] = [];
+    }
+
+    this.treeStates = new Uint8Array(treePositions.length);
 
     // Initialize tree transforms with natural forest color variations
     for (let i = 0; i < treePositions.length; i++) {
       const t = treePositions[i];
+      const cellIdx = t.gridZ * gridSize + t.gridX;
+      if (cellIdx >= 0 && cellIdx < totalCells) {
+        this.treesByCell[cellIdx].push(i);
+      }
+
       this.dummyMatrix.makeTranslation(t.x, t.y, t.z);
       this.dummyMatrix.scale(new THREE.Vector3(t.scale, t.scale, t.scale));
       this.treeMesh.setMatrixAt(i, this.dummyMatrix);
@@ -168,70 +197,97 @@ export class TerrainMesh {
 
   public updateFromGrid(grid: TerrainCell[][]) {
     const colors = this.colorsAttr.array as Float32Array;
+    const { gridSize } = this.config;
 
-    for (let z = 0; z < GRID_SIZE; z++) {
-      for (let x = 0; x < GRID_SIZE; x++) {
-        const idx = z * GRID_SIZE + x;
+    let terrainColorsChanged = false;
+    let treesChanged = false;
+
+    for (let z = 0; z < gridSize; z++) {
+      for (let x = 0; x < gridSize; x++) {
+        const idx = z * gridSize + x;
         const cell = grid[z][x];
-        const baseH = cell.height / MAX_TERRAIN_HEIGHT;
-        const slope = Math.hypot(cell.slopeX, cell.slopeZ);
+        const status = cell.status;
+        const prevStatus = this.cellStatus[idx];
 
-        const targetColor = this.getTerrainColor(baseH, slope);
-
-        if (cell.status === CellStatus.BURNING) {
-          const heat = cell.temperature;
-          // Blazing molten fiery ground along active firefront
-          colors[idx * 3] = 1.0;
-          colors[idx * 3 + 1] = Math.min(0.9, 0.25 + heat * 0.6);
-          colors[idx * 3 + 2] = 0.04;
-          continue;
-        } else if (cell.status === CellStatus.BURNED) {
-          // Charred ground with ash
-          const ash = 0.07 + (((x * 17 + z * 31) % 10) / 10) * 0.07;
-          colors[idx * 3] = ash * 1.05;
-          colors[idx * 3 + 1] = ash;
-          colors[idx * 3 + 2] = ash * 0.95;
+        // 1. Pristine Unburned (0): Base colors are already in place
+        if (status === CellStatus.UNBURNED) {
+          if (prevStatus !== 0) {
+            colors[idx * 3] = this.baseColors[idx * 3];
+            colors[idx * 3 + 1] = this.baseColors[idx * 3 + 1];
+            colors[idx * 3 + 2] = this.baseColors[idx * 3 + 2];
+            this.cellStatus[idx] = 0;
+            terrainColorsChanged = true;
+          }
           continue;
         }
 
-        colors[idx * 3] = targetColor.r;
-        colors[idx * 3 + 1] = targetColor.g;
-        colors[idx * 3 + 2] = targetColor.b;
+        // 2. Permanently Burned (2): Charred ash written ONCE
+        if (status === CellStatus.BURNED) {
+          if (prevStatus !== 2) {
+            const ash = 0.07 + (((x * 17 + z * 31) % 10) / 10) * 0.07;
+            colors[idx * 3] = ash * 1.05;
+            colors[idx * 3 + 1] = ash;
+            colors[idx * 3 + 2] = ash * 0.95;
+            this.cellStatus[idx] = 2;
+            terrainColorsChanged = true;
+
+            // Transition trees on this cell to permanently burned stumps
+            const cellTrees = this.treesByCell[idx];
+            if (cellTrees) {
+              for (let j = 0; j < cellTrees.length; j++) {
+                const treeIdx = cellTrees[j];
+                if (this.treeStates[treeIdx] !== 2) {
+                  const t = this.treeData[treeIdx];
+                  const stumpScale = t.scale * 0.28;
+                  this.dummyMatrix.makeTranslation(t.x, t.y, t.z);
+                  this.dummyMatrix.scale(new THREE.Vector3(stumpScale, stumpScale, stumpScale));
+                  this.treeMesh.setMatrixAt(treeIdx, this.dummyMatrix);
+
+                  this.dummyColor.setHex(0x1a1614);
+                  this.treeMesh.setColorAt(treeIdx, this.dummyColor);
+                  this.treeStates[treeIdx] = 2;
+                  treesChanged = true;
+                }
+              }
+            }
+          }
+          // Already burned and trees collapsed. Skip subsequent frames completely!
+          continue;
+        }
+
+        // 3. Actively BURNING (1)
+        if (status === CellStatus.BURNING) {
+          this.cellStatus[idx] = 1;
+          terrainColorsChanged = true;
+
+          const heat = cell.temperature;
+          colors[idx * 3] = 1.0;
+          colors[idx * 3 + 1] = Math.min(0.9, 0.25 + heat * 0.6);
+          colors[idx * 3 + 2] = 0.04;
+
+          // Animate trees on this actively burning cell
+          const cellTrees = this.treesByCell[idx];
+          if (cellTrees) {
+            for (let j = 0; j < cellTrees.length; j++) {
+              const treeIdx = cellTrees[j];
+              const t = this.treeData[treeIdx];
+              const remainingScale = Math.max(0.1, t.scale * (1.0 - cell.burnProgress * 0.7));
+              this.dummyMatrix.makeTranslation(t.x, t.y, t.z);
+              this.dummyMatrix.scale(new THREE.Vector3(remainingScale, remainingScale, remainingScale));
+              this.treeMesh.setMatrixAt(treeIdx, this.dummyMatrix);
+
+              this.dummyColor.setHex(0xff3300);
+              this.treeMesh.setColorAt(treeIdx, this.dummyColor);
+              this.treeStates[treeIdx] = 1;
+              treesChanged = true;
+            }
+          }
+        }
       }
     }
 
-    this.colorsAttr.needsUpdate = true;
-
-    // Update trees based on burning state
-    let treesChanged = false;
-    for (let i = 0; i < this.treeData.length; i++) {
-      const t = this.treeData[i];
-      const cell = grid[t.gridZ]?.[t.gridX];
-      if (!cell) continue;
-
-      if (cell.status === CellStatus.BURNING) {
-        // Tree catching fire and burning down
-        const remainingScale = Math.max(0.1, t.scale * (1.0 - cell.burnProgress * 0.7));
-        this.dummyMatrix.makeTranslation(t.x, t.y, t.z);
-        this.dummyMatrix.scale(new THREE.Vector3(remainingScale, remainingScale, remainingScale));
-        this.treeMesh.setMatrixAt(i, this.dummyMatrix);
-
-        // Turn fiery red/orange
-        this.dummyColor.setHex(0xff3300);
-        this.treeMesh.setColorAt(i, this.dummyColor);
-        treesChanged = true;
-      } else if (cell.status === CellStatus.BURNED) {
-        // Charred tree skeleton / collapsed stump
-        const stumpScale = t.scale * 0.28;
-        this.dummyMatrix.makeTranslation(t.x, t.y, t.z);
-        this.dummyMatrix.scale(new THREE.Vector3(stumpScale, stumpScale, stumpScale));
-        this.treeMesh.setMatrixAt(i, this.dummyMatrix);
-
-        // Charred charcoal color
-        this.dummyColor.setHex(0x1a1614);
-        this.treeMesh.setColorAt(i, this.dummyColor);
-        treesChanged = true;
-      }
+    if (terrainColorsChanged) {
+      this.colorsAttr.needsUpdate = true;
     }
 
     if (treesChanged) {
@@ -241,6 +297,13 @@ export class TerrainMesh {
   }
 
   public resetTrees() {
+    // Restore pristine base terrain vertex colors
+    const colors = this.colorsAttr.array as Float32Array;
+    colors.set(this.baseColors);
+    this.colorsAttr.needsUpdate = true;
+    this.cellStatus.fill(0);
+    this.treeStates.fill(0);
+
     for (let i = 0; i < this.treeData.length; i++) {
       const t = this.treeData[i];
       this.dummyMatrix.makeTranslation(t.x, t.y, t.z);
@@ -251,5 +314,16 @@ export class TerrainMesh {
     }
     this.treeMesh.instanceMatrix.needsUpdate = true;
     if (this.treeMesh.instanceColor) this.treeMesh.instanceColor.needsUpdate = true;
+  }
+
+  public dispose() {
+    this.geometry.dispose();
+    if (this.terrainMesh.material instanceof THREE.Material) {
+      this.terrainMesh.material.dispose();
+    }
+    this.treeMesh.geometry.dispose();
+    if (this.treeMesh.material instanceof THREE.Material) {
+      this.treeMesh.material.dispose();
+    }
   }
 }

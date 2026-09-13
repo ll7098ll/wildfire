@@ -1,13 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Eye, EyeOff } from 'lucide-react';
 import { FireSpreadEngine } from './simulation/fireSpreadEngine';
-import { generateTerrainData, GRID_SIZE } from './simulation/terrainData';
+import { generateTerrainData, getTerrainConfig, GRID_SIZE } from './simulation/terrainData';
 import { FireParticleSystem } from './three/FireParticleSystem';
 import { SceneManager } from './three/SceneManager';
 import { TerrainMesh } from './three/TerrainMesh';
-import { CameraPreset, LightingMode, SimulationStats, WeatherConditions } from './types';
-import { FireMetricsOverlay } from './components/FireMetricsOverlay';
-import { SimulationControls } from './components/SimulationControls';
+import { CameraPreset, LightingMode, SimulationStats, TerrainScaleMode, WeatherConditions } from './types';
+import { IntegratedControlHub } from './components/IntegratedControlHub';
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -20,6 +18,8 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
   const [speed, setSpeed] = useState<number>(1.0);
   const [showUI, setShowUI] = useState<boolean>(true);
+  const scaleMode: TerrainScaleMode = '100x';
+
   const [weather, setWeather] = useState<WeatherConditions>({
     humidity: 28,
     temperature: 32,
@@ -33,11 +33,14 @@ export default function App() {
   const [stats, setStats] = useState<SimulationStats>({
     activeFires: 0,
     burnedAreaHa: 0,
-    totalForestHa: 0,
+    burnedAreaKm2: 0,
+    totalForestHa: 8200,
+    totalAreaKm2: 100,
     burnedPercentage: 0,
     spreadRateMMin: 0,
     elapsedSeconds: 0,
     peakIntensity: 0,
+    scaleMode: '100x',
   });
 
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>('orbit');
@@ -61,14 +64,15 @@ export default function App() {
       containerRef.current.removeChild(containerRef.current.firstChild);
     }
 
-    const { grid, heights, treePositions } = generateTerrainData();
-    const terrainMesh = new TerrainMesh(grid, heights, treePositions);
+    const config = getTerrainConfig('100x');
+    const { grid, heights, treePositions } = generateTerrainData(config);
+    const terrainMesh = new TerrainMesh(grid, heights, treePositions, config);
     terrainMeshRef.current = terrainMesh;
 
-    const fireParticles = new FireParticleSystem();
+    const fireParticles = new FireParticleSystem('100x');
     fireParticlesRef.current = fireParticles;
 
-    const engine = new FireSpreadEngine(grid);
+    const engine = new FireSpreadEngine(grid, config);
     engineRef.current = engine;
 
     // Do NOT auto-ignite on mount: wait for the user to click the mountain!
@@ -77,7 +81,7 @@ export default function App() {
         const count = engineRef.current.igniteWorld(worldX, worldZ, 2);
         if (count > 0) {
           setIsPlaying(true);
-          setUserIgnitionAlert(`발화 발생! (좌표: X ${Math.round(worldX)}, Z ${Math.round(worldZ)})`);
+          setUserIgnitionAlert(`발화 발생! (좌표: X ${Math.round(worldX)}m, Z ${Math.round(worldZ)}m)`);
           setTimeout(() => setUserIgnitionAlert(null), 3500);
         }
       }
@@ -112,11 +116,11 @@ export default function App() {
         const currentStats = engineRef.current.update(effectiveDt, weatherRef.current);
 
         // Update terrain colors and trees
-        terrainMesh.updateFromGrid(engineRef.current.getGrid());
+        terrainMeshRef.current?.updateFromGrid(engineRef.current.getGrid());
 
-        // Throttle UI React state updates (~15 FPS for high UI performance)
+        // Throttle UI React state updates (~5 FPS for optimal UI responsiveness without main thread lag)
         uiThrottle += rawDt;
-        if (uiThrottle > 0.066) {
+        if (uiThrottle >= 0.20) {
           setStats(currentStats);
           uiThrottle = 0;
         }
@@ -191,22 +195,25 @@ export default function App() {
   // Reset simulation
   const handleReset = () => {
     if (!engineRef.current || !terrainMeshRef.current || !fireParticlesRef.current) return;
-    const { grid } = generateTerrainData();
-    engineRef.current.reset(grid);
+    const config = getTerrainConfig('100x');
+    const { grid } = generateTerrainData(config);
+    engineRef.current.reset(grid, config);
     terrainMeshRef.current.resetTrees();
     terrainMeshRef.current.updateFromGrid(grid);
     fireParticlesRef.current.clear();
-    // Do NOT auto-ignite on reset: preserve peaceful mountain until user clicks!
     setStats({
       activeFires: 0,
       burnedAreaHa: 0,
+      burnedAreaKm2: 0,
       totalForestHa: stats.totalForestHa,
+      totalAreaKm2: 100,
       burnedPercentage: 0,
       spreadRateMMin: 0,
       elapsedSeconds: 0,
       peakIntensity: 0,
+      scaleMode: '100x',
     });
-    setUserIgnitionAlert('산림 지형이 초기화되었습니다. 산의 원하는 위치를 클릭하여 산불을 시작하세요.');
+    setUserIgnitionAlert('100 km² 대형 산악 지형이 초기화되었습니다. 산의 원하는 위치를 클릭하여 산불을 시작하세요.');
     setTimeout(() => setUserIgnitionAlert(null), 3500);
     setIsPlaying(true);
   };
@@ -215,9 +222,10 @@ export default function App() {
   const handleApplyScenario = (scenarioKey: string) => {
     if (!engineRef.current || !terrainMeshRef.current || !fireParticlesRef.current) return;
 
+    const config = getTerrainConfig('100x');
     // Reset grid first
-    const { grid } = generateTerrainData();
-    engineRef.current.reset(grid);
+    const { grid } = generateTerrainData(config);
+    engineRef.current.reset(grid, config);
     terrainMeshRef.current.resetTrees();
     terrainMeshRef.current.updateFromGrid(grid);
     fireParticlesRef.current.clear();
@@ -225,9 +233,9 @@ export default function App() {
     if (scenarioKey === 'valley') {
       // 골짜기 강풍 확산
       setWeather({
-        humidity: 22,
+        humidity: 20,
         temperature: 34,
-        wind: { speed: 18, direction: 45 },
+        wind: { speed: 20, direction: 45 },
         spottingEnabled: true,
       });
       engineRef.current.ignite(42, 88, 3);
@@ -235,29 +243,29 @@ export default function App() {
     } else if (scenarioKey === 'ridge') {
       // 능선 급상승 화재: 오르막 바람과 경사도 가속
       setWeather({
-        humidity: 18,
+        humidity: 16,
         temperature: 36,
-        wind: { speed: 10, direction: 140 },
+        wind: { speed: 12, direction: 140 },
         spottingEnabled: false,
       });
       engineRef.current.ignite(78, 52, 3);
       setUserIgnitionAlert('⛰️ 능선 급상승 산불 시나리오 발화 완료!');
     } else if (scenarioKey === 'spotting') {
-      // 비화(불씨 도약) 산불: 시속 22m/s 강풍
+      // 양간지풍 비화(불씨 도약) 산불: 시속 28m/s 강풍
       setWeather({
-        humidity: 15,
-        temperature: 37,
-        wind: { speed: 22, direction: 90 },
+        humidity: 14,
+        temperature: 28,
+        wind: { speed: 28, direction: 225 },
         spottingEnabled: true,
       });
       engineRef.current.ignite(32, 64, 3);
-      setUserIgnitionAlert('🔥 비화(불씨 도약) 산불 시나리오 발화 완료!');
+      setUserIgnitionAlert('🔥 영동 양간지풍 비화(불씨 도약) 산불 시나리오 발화 완료!');
     } else if (scenarioKey === 'multi') {
       // 낙뢰 다중 동시 발화
       setWeather({
-        humidity: 25,
-        temperature: 31,
-        wind: { speed: 14, direction: 220 },
+        humidity: 24,
+        temperature: 30,
+        wind: { speed: 15, direction: 270 },
         spottingEnabled: true,
       });
       engineRef.current.ignite(36, 40, 2);
@@ -267,6 +275,39 @@ export default function App() {
     }
 
     setTimeout(() => setUserIgnitionAlert(null), 3500);
+    setIsPlaying(true);
+  };
+
+  // AI Sample Ignite Trigger
+  const handleIgniteSample = (temperature: number, humidity: number, windSpeed: number) => {
+    if (!engineRef.current || !terrainMeshRef.current || !fireParticlesRef.current) return;
+
+    const config = getTerrainConfig('100x');
+    // Reset mountain state
+    const { grid } = generateTerrainData(config);
+    engineRef.current.reset(grid, config);
+    terrainMeshRef.current.resetTrees();
+    terrainMeshRef.current.updateFromGrid(grid);
+    fireParticlesRef.current.clear();
+
+    // Update weather with the provided conditions
+    setWeather((prev) => ({
+      ...prev,
+      temperature,
+      humidity,
+      wind: {
+        ...prev.wind,
+        speed: windSpeed,
+      },
+      spottingEnabled: windSpeed >= 7.0,
+    }));
+
+    // Ignite in central mountain valley
+    engineRef.current.ignite(64, 64, 3);
+    setUserIgnitionAlert(
+      `🔥 기상 조건 (${temperature}°C / 습도 ${humidity}% / 풍속 ${windSpeed}m/s) 기준 100km² 광역 산불 발화 완료!`
+    );
+    setTimeout(() => setUserIgnitionAlert(null), 4000);
     setIsPlaying(true);
   };
 
@@ -285,10 +326,10 @@ export default function App() {
             </span>
             <div className="text-center">
               <p className="text-sm font-semibold text-orange-200">
-                산악 지형의 원하는 위치를 클릭하여 산불을 시작하세요!
+                ⛰️ 100km² (10,000 ha) 산악 지형의 원하는 위치를 클릭하여 산불을 시작하세요!
               </p>
               <p className="text-xs text-stone-400 mt-0.5">
-                확대된 대형 산맥 지형 클릭 시 해당 지점에서 화선이 발화되어 번져나갑니다
+                10km × 10km 초대형 산악 능선과 골짜기를 클릭하면 즉시 화선이 발화되어 실시간으로 전파됩니다
               </p>
             </div>
           </div>
@@ -305,39 +346,25 @@ export default function App() {
         </div>
       )}
 
-      {/* Master UI Collapse/Expand Float Button */}
-      <div className="absolute top-4 right-4 z-30 pointer-events-auto">
-        <button
-          id="btn-toggle-all-ui"
-          onClick={() => setShowUI((v) => !v)}
-          title={showUI ? '모든 메뉴 창 숨기기' : '모든 메뉴 창 펼치기'}
-          className="bg-stone-950/85 hover:bg-stone-900 backdrop-blur-md border border-stone-800 text-stone-300 hover:text-white px-3 py-2 rounded-xl shadow-xl flex items-center gap-2 text-xs font-medium transition-all cursor-pointer"
-        >
-          {showUI ? <EyeOff className="w-3.5 h-3.5 text-stone-400" /> : <Eye className="w-3.5 h-3.5 text-orange-400" />}
-          <span>{showUI ? '메뉴 숨기기' : '메뉴 전체 표시'}</span>
-        </button>
-      </div>
-
-      {/* Real-time Fire Metrics HUD (Collapsible) */}
-      {showUI && <FireMetricsOverlay stats={stats} weather={weather} />}
-
-      {/* Bottom Controls Bar (Collapsible) */}
-      {showUI && (
-        <SimulationControls
-          isPlaying={isPlaying}
-          onTogglePlay={() => setIsPlaying((p) => !p)}
-          speed={speed}
-          onChangeSpeed={setSpeed}
-          onReset={handleReset}
-          weather={weather}
-          onUpdateWeather={handleUpdateWeather}
-          cameraPreset={cameraPreset}
-          onSelectCamera={handleSelectCamera}
-          lighting={lighting}
-          onSelectLighting={handleSelectLighting}
-          onApplyScenario={handleApplyScenario}
-        />
-      )}
+      {/* Integrated Unified Control & AI Hub */}
+      <IntegratedControlHub
+        stats={stats}
+        weather={weather}
+        onUpdateWeather={handleUpdateWeather}
+        isPlaying={isPlaying}
+        onTogglePlay={() => setIsPlaying((p) => !p)}
+        speed={speed}
+        onChangeSpeed={setSpeed}
+        onReset={handleReset}
+        cameraPreset={cameraPreset}
+        onSelectCamera={handleSelectCamera}
+        lighting={lighting}
+        onSelectLighting={handleSelectLighting}
+        onApplyScenario={handleApplyScenario}
+        onIgniteSample={handleIgniteSample}
+        showUI={showUI}
+        onToggleUI={() => setShowUI((v) => !v)}
+      />
     </main>
   );
 }

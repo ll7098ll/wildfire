@@ -119,12 +119,16 @@ export const WILDFIRE_TRAINING_DATASET: DatasetItem[] = [
   { id: 100, temperature: 34, humidity: 14, windSpeed: 12.8, risk: '매우높음' },
 ];
 
-// Feature Normalization Bounds (based on dataset domain)
+// Feature Normalization Bounds (covering extended real-world weather bounds)
 const NORM_BOUNDS = {
-  temp: { min: 5, max: 38 },
-  hum: { min: 10, max: 95 },
-  wind: { min: 0.5, max: 15.0 },
+  temp: { min: -10, max: 48 },
+  hum: { min: 5, max: 100 },
+  wind: { min: 0.0, max: 45.0 },
 };
+
+// Prediction Result Cache to avoid redundant k-NN computations in 60 FPS animation loops
+const riskCache = new Map<string, RiskPredictionResult>();
+const MAX_CACHE_SIZE = 256;
 
 /**
  * AI 산불 위험도 예측 엔진 (Weighted k-NN + Softmax Distribution)
@@ -136,6 +140,13 @@ export function predictWildfireRisk(
   windSpeed: number,
   k = 7
 ): RiskPredictionResult {
+  // Quantize cache key to 1 decimal place
+  const cacheKey = `${temperature.toFixed(1)}_${humidity.toFixed(1)}_${windSpeed.toFixed(1)}_${k}`;
+  const cached = riskCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   // 1. Min-Max Normalization
   const normT = (temperature - NORM_BOUNDS.temp.min) / (NORM_BOUNDS.temp.max - NORM_BOUNDS.temp.min);
   const normH = (humidity - NORM_BOUNDS.hum.min) / (NORM_BOUNDS.hum.max - NORM_BOUNDS.hum.min);
@@ -275,7 +286,7 @@ export function predictWildfireRisk(
     distance: parseFloat(n.dist.toFixed(3)),
   }));
 
-  return {
+  const result: RiskPredictionResult = {
     level: predictedLevel,
     score,
     probabilities,
@@ -285,4 +296,12 @@ export function predictWildfireRisk(
     description,
     nearestNeighbors,
   };
+
+  if (riskCache.size >= MAX_CACHE_SIZE) {
+    const firstKey = riskCache.keys().next().value;
+    if (firstKey) riskCache.delete(firstKey);
+  }
+  riskCache.set(cacheKey, result);
+
+  return result;
 }

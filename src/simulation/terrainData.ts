@@ -1,9 +1,43 @@
-import { CellStatus, TerrainCell } from '../types';
+import { CellStatus, TerrainCell, TerrainScaleMode } from '../types';
 
-export const GRID_SIZE = 128;
-export const WORLD_SIZE = 1000;
-export const CELL_SPACING = WORLD_SIZE / (GRID_SIZE - 1);
-export const MAX_TERRAIN_HEIGHT = 220; // Majestic mountain elevation with 200m+ height variance
+export interface TerrainConfig {
+  scaleMode: TerrainScaleMode;
+  worldSize: number; // 10,000m (10km x 10km = 100km² = 10,000 ha)
+  gridSize: number;
+  cellSpacing: number;
+  maxHeight: number;
+  treeScale: number;
+  areaHa: number;
+  areaKm2: number;
+  forestDensity: number; // 0.1 to 1.0 (10% to 100%)
+}
+
+export function getTerrainConfig(
+  scaleMode: TerrainScaleMode = '100x',
+  forestDensity: number = 0.8
+): TerrainConfig {
+  const density = Math.min(1.0, Math.max(0.1, forestDensity));
+  // 100배 산림 광역 면적: 10km x 10km = 100 km² = 10,000 ha (실측 산악 국립공원 스케일)
+  const gridSize = 128;
+  const worldSize = 10000;
+  return {
+    scaleMode: '100x',
+    worldSize,
+    gridSize,
+    cellSpacing: worldSize / (gridSize - 1), // ~78.74m
+    maxHeight: 1450, // 1,450m 백두대간급 주봉 고도
+    treeScale: 8.5,
+    areaHa: 10000,
+    areaKm2: 100,
+    forestDensity: density,
+  };
+}
+
+export const DEFAULT_TERRAIN_CONFIG = getTerrainConfig('100x');
+export const GRID_SIZE = DEFAULT_TERRAIN_CONFIG.gridSize;
+export const WORLD_SIZE = DEFAULT_TERRAIN_CONFIG.worldSize;
+export const CELL_SPACING = DEFAULT_TERRAIN_CONFIG.cellSpacing;
+export const MAX_TERRAIN_HEIGHT = DEFAULT_TERRAIN_CONFIG.maxHeight;
 
 // Fast 2D deterministic gradient noise with smooth quintic Hermite interpolation
 function hash2(x: number, y: number): { gx: number; gy: number } {
@@ -74,21 +108,28 @@ function ridgedNoise(x: number, y: number, octaves = 5): number {
   return value;
 }
 
-export function generateTerrainData(): {
+export function generateTerrainData(scaleModeOrConfig: TerrainScaleMode | TerrainConfig = '100x'): {
   grid: TerrainCell[][];
   heights: Float32Array;
   treePositions: { x: number; y: number; z: number; scale: number; gridX: number; gridZ: number }[];
+  config: TerrainConfig;
 } {
+  const config: TerrainConfig =
+    typeof scaleModeOrConfig === 'string'
+      ? getTerrainConfig(scaleModeOrConfig)
+      : scaleModeOrConfig;
+
+  const { gridSize, cellSpacing, maxHeight, treeScale } = config;
   const grid: TerrainCell[][] = [];
-  const heights = new Float32Array(GRID_SIZE * GRID_SIZE);
+  const heights = new Float32Array(gridSize * gridSize);
   const treePositions: { x: number; y: number; z: number; scale: number; gridX: number; gridZ: number }[] = [];
 
   // 1. Generate realistic alpine mountain topography
-  for (let z = 0; z < GRID_SIZE; z++) {
+  for (let z = 0; z < gridSize; z++) {
     grid[z] = [];
-    for (let x = 0; x < GRID_SIZE; x++) {
-      const nx = (x / (GRID_SIZE - 1)) * 4.2;
-      const nz = (z / (GRID_SIZE - 1)) * 4.2;
+    for (let x = 0; x < gridSize; x++) {
+      const nx = (x / (gridSize - 1)) * 4.2;
+      const nz = (z / (gridSize - 1)) * 4.2;
 
       // Domain warping for natural geological folding and winding mountain canyons
       const warpX = fbm(nx * 1.2 + 0.3, nz * 1.2 + 0.8, 3) * 0.7;
@@ -105,7 +146,7 @@ export function generateTerrainData(): {
       const crossRidge = ridgedNoise(wnz * 0.82 + 0.7, wnx * 0.82 + 2.1, 5) * 0.36;
 
       // Distinct Grand Mountain Summits (주요 명산 연봉):
-      // 1. 중앙 주봉 (Mount Grand Summit) - Highest peak (~220m elevation)
+      // 1. 중앙 주봉 (Mount Grand Summit) - Highest peak (~1,450m elevation in 100x scale)
       const peak1 = Math.exp(-(((x - 64) ** 2 + (z - 60) ** 2) / 380)) * 0.55;
       // 2. 동북 암봉 (Northeast Alpine Peak)
       const peak2 = Math.exp(-(((x - 94) ** 2 + (z - 36) ** 2) / 340)) * 0.48;
@@ -147,24 +188,26 @@ export function generateTerrainData(): {
         canyonValley;
 
       // Perimeter edge falloff to keep valleys cleanly sloping towards borders
-      const edgeX = Math.min(x, GRID_SIZE - 1 - x) / (GRID_SIZE * 0.14);
-      const edgeZ = Math.min(z, GRID_SIZE - 1 - z) / (GRID_SIZE * 0.14);
+      const edgeX = Math.min(x, gridSize - 1 - x) / (gridSize * 0.14);
+      const edgeZ = Math.min(z, gridSize - 1 - z) / (gridSize * 0.14);
       const edgeFalloff = Math.min(1.0, Math.min(edgeX, edgeZ));
       h *= Math.pow(edgeFalloff, 0.42);
 
-      // Map accurately: low valleys ~12m, high peaks ~200-220m!
-      // This produces dramatic, unmistakable real mountain height variation!
+      // Map elevation accurately to configured mountain scale
       const normalizedH = Math.max(0.06, Math.min(1.0, h * 0.68));
-      const elevation = normalizedH * MAX_TERRAIN_HEIGHT;
-      heights[z * GRID_SIZE + x] = elevation;
+      const elevation = normalizedH * maxHeight;
+      heights[z * gridSize + x] = elevation;
 
-      // Biomass fuel density across all mountain terrain:
-      // High fuel everywhere so fire can spread seamlessly across the entire forested mountain
+      // Biomass fuel density across mountain terrain
       const fuelNoise = fbm(nx * 2.8 + 7.1, nz * 2.8 + 4.9, 4);
-      let fuel = 0.68 + fuelNoise * 0.28; // rich fuel 0.68 ~ 0.96 everywhere
+      let baseFuel = 0.68 + fuelNoise * 0.28;
       if (normalizedH < 0.30) {
-        fuel = Math.min(1.0, fuel * 1.12); // lush valley undergrowth
+        baseFuel = Math.min(1.0, baseFuel * 1.12);
       }
+      // Scale fuel by forest density: lower density means sparser vegetation and less fuel
+      const density = config.forestDensity ?? 0.8;
+      const fuelFactor = 0.35 + density * 0.65;
+      const fuel = Math.max(0.06, Math.min(1.0, baseFuel * fuelFactor));
 
       grid[z][x] = {
         x,
@@ -183,92 +226,100 @@ export function generateTerrainData(): {
   }
 
   // 2. Calculate slopes (gradients) for each cell
-  for (let z = 0; z < GRID_SIZE; z++) {
-    for (let x = 0; x < GRID_SIZE; x++) {
+  for (let z = 0; z < gridSize; z++) {
+    for (let x = 0; x < gridSize; x++) {
       const hLeft = x > 0 ? grid[z][x - 1].height : grid[z][x].height;
-      const hRight = x < GRID_SIZE - 1 ? grid[z][x + 1].height : grid[z][x].height;
+      const hRight = x < gridSize - 1 ? grid[z][x + 1].height : grid[z][x].height;
       const hTop = z > 0 ? grid[z - 1][x].height : grid[z][x].height;
-      const hBottom = z < GRID_SIZE - 1 ? grid[z + 1][x].height : grid[z][x].height;
+      const hBottom = z < gridSize - 1 ? grid[z + 1][x].height : grid[z][x].height;
 
-      grid[z][x].slopeX = (hRight - hLeft) / (2 * CELL_SPACING);
-      grid[z][x].slopeZ = (hBottom - hTop) / (2 * CELL_SPACING);
+      grid[z][x].slopeX = (hRight - hLeft) / (2 * cellSpacing);
+      grid[z][x].slopeZ = (hBottom - hTop) / (2 * cellSpacing);
     }
   }
 
-  // Bilinear elevation sampler so every single tree is anchored directly on the mountain surface
+  // Bilinear elevation sampler
   function getInterpolatedElevation(gx: number, gz: number): number {
-    const cx = Math.max(0, Math.min(GRID_SIZE - 2, Math.floor(gx)));
-    const cz = Math.max(0, Math.min(GRID_SIZE - 2, Math.floor(gz)));
+    const cx = Math.max(0, Math.min(gridSize - 2, Math.floor(gx)));
+    const cz = Math.max(0, Math.min(gridSize - 2, Math.floor(gz)));
     const tx = Math.max(0, Math.min(1, gx - cx));
     const tz = Math.max(0, Math.min(1, gz - cz));
 
-    const h00 = heights[cz * GRID_SIZE + cx];
-    const h10 = heights[cz * GRID_SIZE + (cx + 1)];
-    const h01 = heights[(cz + 1) * GRID_SIZE + cx];
-    const h11 = heights[(cz + 1) * GRID_SIZE + (cx + 1)];
+    const h00 = heights[cz * gridSize + cx];
+    const h10 = heights[cz * gridSize + (cx + 1)];
+    const h01 = heights[(cz + 1) * gridSize + cx];
+    const h11 = heights[(cz + 1) * gridSize + (cx + 1)];
 
     const top = h00 + tx * (h10 - h00);
     const bottom = h01 + tx * (h11 - h01);
     return top + tz * (bottom - top);
   }
 
-  // 3. Complete 100% surface forest coverage:
-  // Every single cell across valleys, slopes, passes, crags, and high summits has trees!
-  const halfGrid = (GRID_SIZE - 1) / 2;
+  // 3. Forest coverage
+  const halfGrid = (gridSize - 1) / 2;
+  const density = config.forestDensity ?? 0.8;
 
-  for (let z = 0; z < GRID_SIZE; z++) {
-    for (let x = 0; x < GRID_SIZE; x++) {
+  for (let z = 0; z < gridSize; z++) {
+    for (let x = 0; x < gridSize; x++) {
       const cellHeight = grid[z][x].height;
-      const normH = cellHeight / MAX_TERRAIN_HEIGHT;
+      const normH = cellHeight / maxHeight;
 
-      // Primary tree on every single cell with subtle natural jitter
       const jitterX = hash2(x * 7.31 + z * 3.17, z * 9.17 + x * 2.33).gx * 0.36;
       const jitterZ = hash2(z * 8.43 + x * 4.19, x * 6.29 + z * 5.11).gy * 0.36;
-      const worldX = (x - halfGrid + jitterX) * CELL_SPACING;
-      const worldZ = (z - halfGrid + jitterZ) * CELL_SPACING;
+      const worldX = (x - halfGrid + jitterX) * cellSpacing;
+      const worldZ = (z - halfGrid + jitterZ) * cellSpacing;
       const treeY = getInterpolatedElevation(x + jitterX, z + jitterZ);
 
-      // Adaptive tree scale: stately conifer in valleys, hardy pine on high mountain crests
       const noiseVal = hash2(x * 3.7 + 1.1, z * 3.7 + 9.3).gx * 0.5 + 0.5;
       let baseScale = 1.10;
       if (normH < 0.35) {
-        baseScale = 1.32 + noiseVal * 0.42; // Deep valley conifer
+        baseScale = 1.32 + noiseVal * 0.42;
       } else if (normH < 0.72) {
-        baseScale = 1.15 + noiseVal * 0.36; // Mid mountain slope pine
+        baseScale = 1.15 + noiseVal * 0.36;
       } else {
-        baseScale = 0.95 + noiseVal * 0.32; // Alpine ridge dwarf pine
+        baseScale = 0.95 + noiseVal * 0.32;
       }
+      baseScale *= treeScale;
 
-      grid[z][x].treeId = treePositions.length;
-      treePositions.push({
-        x: worldX,
-        y: Math.max(0.5, treeY),
-        z: worldZ,
-        scale: baseScale,
-        gridX: x,
-        gridZ: z,
-      });
+      // Determine tree spawning based on user-configured Forest Density
+      // spawnNoise is 0.0 ~ 1.0; comparing with density creates natural distribution
+      const spawnNoise = hash2(x * 17.3 + 9.1, z * 29.7 + 3.4).gx * 0.5 + 0.5;
+      const willSpawnPrimary = spawnNoise < density * 1.06;
 
-      // Secondary dense forest clustering across slopes and valleys for a lush unbroken canopy
-      if (hash2(x * 13.9, z * 17.3).gy > 0.02) {
-        const ox2 = hash2(x * 19.3 + 5.1, z * 23.1 + 8.7).gx * 0.44;
-        const oz2 = hash2(z * 21.7 + 3.4, x * 15.4 + 9.2).gy * 0.44;
-        const worldX2 = (x - halfGrid + ox2) * CELL_SPACING;
-        const worldZ2 = (z - halfGrid + oz2) * CELL_SPACING;
-        const treeY2 = getInterpolatedElevation(x + ox2, z + oz2);
-
+      if (willSpawnPrimary) {
+        grid[z][x].treeId = treePositions.length;
         treePositions.push({
-          x: worldX2,
-          y: Math.max(0.5, treeY2),
-          z: worldZ2,
-          scale: baseScale * (0.86 + hash2(x * 3.1, z * 3.1).gx * 0.22),
+          x: worldX,
+          y: Math.max(0.5, treeY),
+          z: worldZ,
+          scale: baseScale,
           gridX: x,
           gridZ: z,
         });
+
+        // Secondary dense forest clustering (spawns when forest density is sufficient)
+        if (density > 0.32 && hash2(x * 13.9, z * 17.3).gy > (1.16 - density * 1.32)) {
+          const ox2 = hash2(x * 19.3 + 5.1, z * 23.1 + 8.7).gx * 0.44;
+          const oz2 = hash2(z * 21.7 + 3.4, x * 15.4 + 9.2).gy * 0.44;
+          const worldX2 = (x - halfGrid + ox2) * cellSpacing;
+          const worldZ2 = (z - halfGrid + oz2) * cellSpacing;
+          const treeY2 = getInterpolatedElevation(x + ox2, z + oz2);
+
+          treePositions.push({
+            x: worldX2,
+            y: Math.max(0.5, treeY2),
+            z: worldZ2,
+            scale: baseScale * (0.86 + hash2(x * 3.1, z * 3.1).gx * 0.22),
+            gridX: x,
+            gridZ: z,
+          });
+        }
+      } else {
+        grid[z][x].treeId = -1;
       }
     }
   }
 
-  return { grid, heights, treePositions };
+  return { grid, heights, treePositions, config };
 }
 

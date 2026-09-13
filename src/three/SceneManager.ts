@@ -47,17 +47,26 @@ export class SceneManager {
 
     // 1. Scene & Camera
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.FogExp2(0x90bce2, 0.00030);
+    const is100x = this.terrain.config.scaleMode === '100x';
+    const initialFogDensity = is100x ? 0.000035 : 0.00030;
+    this.scene.fog = new THREE.FogExp2(0x90bce2, initialFogDensity);
 
     const width = Math.max(container.clientWidth || 0, window.innerWidth || 1200);
     const height = Math.max(container.clientHeight || 0, window.innerHeight || 800);
-    this.camera = new THREE.PerspectiveCamera(45, width / height, 2, 6000);
-    this.camera.position.set(-140, 360, 640);
+    const farClip = is100x ? 45000 : 6000;
+    this.camera = new THREE.PerspectiveCamera(45, width / height, 5, farClip);
+
+    const initialCamPos = is100x ? new THREE.Vector3(-1400, 3600, 6400) : new THREE.Vector3(-140, 360, 640);
+    const initialTarget = is100x ? new THREE.Vector3(0, 480, 0) : new THREE.Vector3(0, 85, 0);
+    this.camera.position.copy(initialCamPos);
+    this.targetCameraPos.copy(initialCamPos);
+    this.targetLookAt.copy(initialTarget);
 
     // 2. Renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setSize(width, height);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    // Cap pixel ratio at 1.5 for silky smooth GPU rendering without quality loss on Retina displays
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.25;
     this.renderer.shadowMap.enabled = true;
@@ -75,9 +84,9 @@ export class SceneManager {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.06;
     this.controls.maxPolarAngle = Math.PI / 2 - 0.03; // Don't clip under ground
-    this.controls.minDistance = 40;
-    this.controls.maxDistance = 2400;
-    this.controls.target.set(0, 85, 0);
+    this.controls.minDistance = is100x ? 200 : 40;
+    this.controls.maxDistance = is100x ? 26000 : 2400;
+    this.controls.target.copy(initialTarget);
 
     // 4. Lights
     // Ambient light provides base illumination so mountain canyons are legible
@@ -89,15 +98,16 @@ export class SceneManager {
     this.scene.add(hemiLight);
 
     this.dirLight = new THREE.DirectionalLight(0xfffaed, 1.85);
-    this.dirLight.position.set(450, 750, 350);
+    const lightDist = is100x ? 10 : 1;
+    this.dirLight.position.set(450 * lightDist, 750 * lightDist, 350 * lightDist);
     this.dirLight.castShadow = true;
     this.dirLight.shadow.bias = 0.0002;
     this.dirLight.shadow.normalBias = 0.06;
-    this.dirLight.shadow.mapSize.width = 2048;
-    this.dirLight.shadow.mapSize.height = 2048;
+    this.dirLight.shadow.mapSize.width = 1024;
+    this.dirLight.shadow.mapSize.height = 1024;
     this.dirLight.shadow.camera.near = 10;
-    this.dirLight.shadow.camera.far = 2400;
-    const d = 650; // Envelope the grand 1000-unit mountain range
+    this.dirLight.shadow.camera.far = is100x ? 25000 : 2400;
+    const d = is100x ? 6500 : 650; // Envelope mountain range
     this.dirLight.shadow.camera.left = -d;
     this.dirLight.shadow.camera.right = d;
     this.dirLight.shadow.camera.top = d;
@@ -106,15 +116,16 @@ export class SceneManager {
     this.scene.add(this.dirLight.target);
 
     // Dynamic fire point lights (flickering orange glows on mountain terrain)
-    this.fireLight1 = new THREE.PointLight(0xff5500, 0, 420, 1.3);
+    const fireLightDist = is100x ? 3400 : 420;
+    this.fireLight1 = new THREE.PointLight(0xff5500, 0, fireLightDist, 1.3);
     this.fireLight1.position.set(0, 60, 0);
     this.scene.add(this.fireLight1);
 
-    this.fireLight2 = new THREE.PointLight(0xff8800, 0, 340, 1.5);
+    this.fireLight2 = new THREE.PointLight(0xff8800, 0, fireLightDist * 0.8, 1.5);
     this.fireLight2.position.set(0, 60, 0);
     this.scene.add(this.fireLight2);
 
-    this.fireLight3 = new THREE.PointLight(0xff3300, 0, 260, 1.4);
+    this.fireLight3 = new THREE.PointLight(0xff3300, 0, fireLightDist * 0.65, 1.4);
     this.fireLight3.position.set(0, 60, 0);
     this.scene.add(this.fireLight3);
 
@@ -128,8 +139,10 @@ export class SceneManager {
     // 6. Interactive Click Reticle (Tactical Targeting Cursor)
     this.reticleMesh = new THREE.Group();
 
-    // Outer ring
-    const reticleGeo = new THREE.RingGeometry(7.0, 9.2, 32);
+    // Outer ring sized for mountain scale
+    const ringInner = is100x ? 55.0 : 7.0;
+    const ringOuter = is100x ? 76.0 : 9.2;
+    const reticleGeo = new THREE.RingGeometry(ringInner, ringOuter, 32);
     reticleGeo.rotateX(-Math.PI / 2);
     const reticleMat = new THREE.MeshBasicMaterial({
       color: 0xff4500,
@@ -141,7 +154,8 @@ export class SceneManager {
     this.reticleMesh.add(this.reticleRing);
 
     // Inner pulsing target dot
-    const centerDotGeo = new THREE.CircleGeometry(2.8, 16);
+    const dotRadius = is100x ? 22.0 : 2.8;
+    const centerDotGeo = new THREE.CircleGeometry(dotRadius, 16);
     centerDotGeo.rotateX(-Math.PI / 2);
     const centerDotMat = new THREE.MeshBasicMaterial({
       color: 0xffffff,
@@ -203,54 +217,139 @@ export class SceneManager {
   public setLightingMode(mode: LightingMode) {
     this.currentLighting = mode;
     const fog = this.scene.fog as THREE.FogExp2;
+    const is100x = this.terrain.config.scaleMode === '100x';
+    const densityFactor = is100x ? 0.11 : 1.0;
+
     if (mode === 'dusk') {
       // Warm sunset sky & rich mountain illumination
       this.scene.background = new THREE.Color(0x56384a);
       fog.color.setHex(0x6b4859);
-      fog.density = 0.00032;
+      fog.density = 0.00032 * densityFactor;
       this.ambientLight.color.setHex(0xf3cca3);
       this.ambientLight.intensity = 1.2;
       this.dirLight.color.setHex(0xff9944);
       this.dirLight.intensity = 1.8;
-      this.dirLight.position.set(-450, 420, 320);
+      const lightDist = is100x ? 10 : 1;
+      this.dirLight.position.set(-450 * lightDist, 420 * lightDist, 320 * lightDist);
       this.renderer.toneMappingExposure = 1.25;
     } else if (mode === 'night') {
       // Deep midnight indigo sky with glowing moonlit mountains
       this.scene.background = new THREE.Color(0x111a2e);
       fog.color.setHex(0x19253d);
-      fog.density = 0.00040;
+      fog.density = 0.00040 * densityFactor;
       this.ambientLight.color.setHex(0x738cb8);
       this.ambientLight.intensity = 0.95;
       this.dirLight.color.setHex(0x8faee0);
       this.dirLight.intensity = 1.15;
-      this.dirLight.position.set(380, 550, 360);
+      const lightDist = is100x ? 10 : 1;
+      this.dirLight.position.set(380 * lightDist, 550 * lightDist, 360 * lightDist);
       this.renderer.toneMappingExposure = 1.4;
     } else {
       // Crisp sunny day sky with vast mountain ridges
       this.scene.background = new THREE.Color(0x6ca3d8);
       fog.color.setHex(0x90bce2);
-      fog.density = 0.00025;
+      fog.density = 0.00025 * densityFactor;
       this.ambientLight.color.setHex(0xffffff);
       this.ambientLight.intensity = 1.35;
       this.dirLight.color.setHex(0xfffaed);
       this.dirLight.intensity = 1.95;
-      this.dirLight.position.set(450, 750, 350);
+      const lightDist = is100x ? 10 : 1;
+      this.dirLight.position.set(450 * lightDist, 750 * lightDist, 350 * lightDist);
       this.renderer.toneMappingExposure = 1.2;
     }
   }
 
   public setCameraPreset(preset: CameraPreset, fireFrontCenter?: { x: number; y: number; z: number }) {
     this.currentCameraPreset = preset;
+    const is100x = this.terrain.config.scaleMode === '100x';
+
     if (preset === 'orbit') {
-      this.targetCameraPos.set(-140, 360, 640);
-      this.targetLookAt.set(0, 85, 0);
+      if (is100x) {
+        this.targetCameraPos.set(-1400, 3600, 6400);
+        this.targetLookAt.set(0, 480, 0);
+      } else {
+        this.targetCameraPos.set(-140, 360, 640);
+        this.targetLookAt.set(0, 85, 0);
+      }
     } else if (preset === 'top_down') {
-      this.targetCameraPos.set(0, 1250, 1);
-      this.targetLookAt.set(0, 0, 0);
+      if (is100x) {
+        this.targetCameraPos.set(0, 13000, 1);
+        this.targetLookAt.set(0, 0, 0);
+      } else {
+        this.targetCameraPos.set(0, 1250, 1);
+        this.targetLookAt.set(0, 0, 0);
+      }
     } else if (preset === 'track_front' && fireFrontCenter) {
-      this.targetCameraPos.set(fireFrontCenter.x + 110, fireFrontCenter.y + 80, fireFrontCenter.z + 140);
-      this.targetLookAt.set(fireFrontCenter.x, fireFrontCenter.y, fireFrontCenter.z);
+      if (is100x) {
+        this.targetCameraPos.set(fireFrontCenter.x + 850, fireFrontCenter.y + 600, fireFrontCenter.z + 1100);
+        this.targetLookAt.set(fireFrontCenter.x, fireFrontCenter.y, fireFrontCenter.z);
+      } else {
+        this.targetCameraPos.set(fireFrontCenter.x + 110, fireFrontCenter.y + 80, fireFrontCenter.z + 140);
+        this.targetLookAt.set(fireFrontCenter.x, fireFrontCenter.y, fireFrontCenter.z);
+      }
     }
+  }
+
+  public updateTerrainMesh(newTerrain: TerrainMesh, resetCamera: boolean = false) {
+    this.scene.remove(this.terrain.group);
+    this.terrain.dispose();
+    this.terrain = newTerrain;
+    this.scene.add(this.terrain.group);
+
+    const is100x = newTerrain.config.scaleMode === '100x';
+    this.camera.far = is100x ? 45000 : 6000;
+    this.camera.updateProjectionMatrix();
+
+    this.controls.minDistance = is100x ? 200 : 40;
+    this.controls.maxDistance = is100x ? 26000 : 2400;
+
+    const fireLightDist = is100x ? 3400 : 420;
+    this.fireLight1.distance = fireLightDist;
+    this.fireLight2.distance = fireLightDist * 0.8;
+    this.fireLight3.distance = fireLightDist * 0.65;
+
+    // Refresh reticle sizing
+    this.scene.remove(this.reticleMesh);
+    this.reticleMesh = new THREE.Group();
+    const ringInner = is100x ? 55.0 : 7.0;
+    const ringOuter = is100x ? 76.0 : 9.2;
+    const reticleGeo = new THREE.RingGeometry(ringInner, ringOuter, 32);
+    reticleGeo.rotateX(-Math.PI / 2);
+    const reticleMat = new THREE.MeshBasicMaterial({
+      color: 0xff4500,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.9,
+    });
+    this.reticleRing = new THREE.Mesh(reticleGeo, reticleMat);
+    this.reticleMesh.add(this.reticleRing);
+
+    const dotRadius = is100x ? 22.0 : 2.8;
+    const centerDotGeo = new THREE.CircleGeometry(dotRadius, 16);
+    centerDotGeo.rotateX(-Math.PI / 2);
+    const centerDotMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.85,
+    });
+    this.reticlePulse = new THREE.Mesh(centerDotGeo, centerDotMat);
+    this.reticleMesh.add(this.reticlePulse);
+    this.reticleMesh.position.set(0, -1000, 0);
+    this.scene.add(this.reticleMesh);
+
+    // Apply lighting & camera preset for new scale
+    this.setLightingMode(this.currentLighting);
+    if (resetCamera) {
+      this.setCameraPreset('orbit');
+      this.camera.position.copy(this.targetCameraPos);
+      this.controls.target.copy(this.targetLookAt);
+      this.controls.update();
+    }
+  }
+
+  public updateTerrainScale(newTerrain: TerrainMesh) {
+    this.updateTerrainMesh(newTerrain, true);
   }
 
   public update(
@@ -259,17 +358,19 @@ export class SceneManager {
     fireFrontCenter: { x: number; y: number; z: number },
     weather: WeatherConditions
   ) {
+    const is100x = this.terrain.config.scaleMode === '100x';
+
     // 1. Fire dynamic lighting
     if (firePoints.length > 0) {
       const flicker = 0.85 + Math.sin(Date.now() * 0.018) * 0.15 + Math.random() * 0.12;
-      const intensity = Math.min(32.0, 6.0 + Math.sqrt(firePoints.length) * 1.8) * flicker;
+      const intensity = Math.min(is100x ? 240.0 : 32.0, (is100x ? 45.0 : 6.0) + Math.sqrt(firePoints.length) * (is100x ? 12.0 : 1.8)) * flicker;
 
-      this.fireLight1.position.set(fireFrontCenter.x, fireFrontCenter.y + 8.0, fireFrontCenter.z);
+      this.fireLight1.position.set(fireFrontCenter.x, fireFrontCenter.y + (is100x ? 50.0 : 8.0), fireFrontCenter.z);
       this.fireLight1.intensity = intensity;
 
       if (firePoints.length > 2) {
         const altPoint = firePoints[Math.floor(firePoints.length * 0.4)];
-        this.fireLight2.position.set(altPoint.x, altPoint.y + 7.0, altPoint.z);
+        this.fireLight2.position.set(altPoint.x, altPoint.y + (is100x ? 45.0 : 7.0), altPoint.z);
         this.fireLight2.intensity = intensity * 0.85;
       } else {
         this.fireLight2.intensity = 0;
@@ -277,7 +378,7 @@ export class SceneManager {
 
       if (firePoints.length > 6) {
         const altPoint2 = firePoints[Math.floor(firePoints.length * 0.8)];
-        this.fireLight3.position.set(altPoint2.x, altPoint2.y + 7.0, altPoint2.z);
+        this.fireLight3.position.set(altPoint2.x, altPoint2.y + (is100x ? 45.0 : 7.0), altPoint2.z);
         this.fireLight3.intensity = intensity * 0.75;
       } else {
         this.fireLight3.intensity = 0;
@@ -291,7 +392,14 @@ export class SceneManager {
     // 2. Camera transition if tracking
     if (this.currentCameraPreset === 'track_front' && firePoints.length > 0) {
       this.targetLookAt.set(fireFrontCenter.x, fireFrontCenter.y, fireFrontCenter.z);
-      this.targetCameraPos.set(fireFrontCenter.x + 110, fireFrontCenter.y + 80, fireFrontCenter.z + 140);
+      const camOffset = is100x
+        ? { x: 850, y: 600, z: 1100 }
+        : { x: 110, y: 80, z: 140 };
+      this.targetCameraPos.set(
+        fireFrontCenter.x + camOffset.x,
+        fireFrontCenter.y + camOffset.y,
+        fireFrontCenter.z + camOffset.z
+      );
     }
 
     if (this.currentCameraPreset !== 'orbit') {

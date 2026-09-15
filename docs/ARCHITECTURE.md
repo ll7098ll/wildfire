@@ -23,6 +23,11 @@
 
 ## 2. 계층별 아키텍처 구조 (Layered Architecture)
 
+<div align="center">
+  <img src="images/hero_dashboard.jpg" alt="시스템 아키텍처 및 3D WebGL 렌더링 파이프라인" width="100%" style="border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.5);" />
+  <p align="center"><em>▲ WebGL 3D 엔진(Three.js)과 통합 재난 관제 Presentation Layer(React/Tailwind)의 결합 구조</em></p>
+</div>
+
 ```text
 +-----------------------------------------------------------------------------------+
 |                              1. Presentation Layer                                |
@@ -81,6 +86,11 @@
 * 기온($-10\sim 48^\circ\text{C}$), 상대 습도($5\sim 100\%$), 풍속($0\sim 45\text{m/s}$) 복합 인자를 종합 평가하여 0~100점의 산불 종합 위험 지수를 산출합니다.
 * 4단계 등급(`낮음`, `보통`, `높음`, `매우높음`)과 등급별 확률 분포, 물리 확산 배율($\text{spreadMultiplier}$), 화염 세기 배율, 비화 발생 계수를 제공합니다.
 * 산림청(KFS) 실측 기상 데이터 100건을 탑재하여 검색, 필터링, 원클릭 시뮬레이션 발화를 지원합니다.
+
+<div align="center">
+  <img src="images/control_hub_ui.jpg" alt="AI 위험도 모델 및 통합 관제 독 UI" width="100%" style="border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.4);" />
+  <p align="center"><em>▲ AI 산불 종합 위험도 지수 산출 및 통합 관제 독(Control Dock) 컴포넌트 구조</em></p>
+</div>
 
 ### 3.4 `SceneManager.ts` (3D 씬 매니저)
 * Three.js의 `PerspectiveCamera`, `WebGLRenderer`, `Scene`, `OrbitControls`를 총괄 관리합니다.

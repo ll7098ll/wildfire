@@ -11,6 +11,11 @@
 
 사용자는 실제 백두대간 산악 지형을 닮은 **$10\text{km} \times 10\text{km}$ ($100\text{ km}^2$, 10,000 ha)** 규모의 3D 초대형 산림 모델 위에서 임의 지점을 클릭하여 산불을 발화시키고, 영동 양간지풍·겨울 한파 건조·폭염 가뭄 등 극한 기상 인자(기온 $-10\sim 48^\circ\text{C}$, 습도 $5\sim 100\%$, 풍속 $0\sim 45\text{m/s}$)를 실시간으로 변경하며 불길이 능선과 골짜기를 타고 번져나가는 과정을 모니터링할 수 있습니다.
 
+<div align="center">
+  <img src="docs/images/hero_dashboard.jpg" alt="산불 3D 시뮬레이터 메인 대시보드" width="100%" style="border-radius: 8px; box-shadow: 0 8px 30px rgba(0,0,0,0.6);" />
+  <p align="center"><em>▲ 100 km² 백두대간급 초대형 3D 산악 지형 및 실시간 산불 확산 WebGL 관제 대시보드</em></p>
+</div>
+
 ---
 
 ## 📌 주요 특징 (Key Features)
@@ -21,6 +26,11 @@
 * 해발 고도 1,450m급 주봉과 험준한 능선 및 깊은 협곡 완벽 재현 (단일 셀 폭 $\approx 78.7\text{m}$, 셀 면적 $\approx 6,200\text{m}^2 \approx 0.62\text{ha}$)
 * `THREE.InstancedMesh` 최적화를 통해 **16,000그루 이상의 3D 침엽수·소나무**를 고도 및 경사도에 맞춰 실시간 렌더링
 * 화선이 수목에 도달하면 단계별 연소 및 탄화(탄화목 색상 전이)를 거쳐 완전 소실
+
+<div align="center">
+  <img src="docs/images/night_fire_front.jpg" alt="야간 산불 화선 및 다이내믹 포인트 라이트" width="100%" style="border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,0.5);" />
+  <p align="center"><em>▲ 심야(Night) 조명 모드 하에서 동적 포인트 라이트와 십자 화염·연기·불씨 파티클이 연출하는 실시간 화선</em></p>
+</div>
 
 ### 2. Rothermel 기반 고정밀 산불 전파 물리 엔진
 * **세포 자동자(Cellular Automata) 128×128 그리드 (16,384개 셀)** 연산
@@ -35,6 +45,11 @@
 * **비화(Spotting Fire) 현상 시뮬레이션:**
   * 강풍 발생 시 상승 기류에 의해 불씨가 공중으로 치솟아 수백 미터에서 1.5km 이상 전방으로 도약 발화하는 현상 재현
 
+<div align="center">
+  <img src="docs/images/aerial_spread_map.jpg" alt="조감도(Top-Down) 산불 전파 및 연소지 맵" width="100%" style="border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,0.5);" />
+  <p align="center"><em>▲ 조감도(Top-Down) 시점에서 관찰한 128×128 세포 자동자 격자 전파 및 능선/골짜기 연소면</em></p>
+</div>
+
 ### 3. AI 산불 위험도 예측 모델 & 산림청 100건 실증 데이터셋
 * **다변수 머신러닝 기반 산불 위험도 예측 (Predictive Risk Model):**
   * 기온, 습도, 풍속 복합 인자를 평가하여 0~100점의 종합 위험도 지수 산출
@@ -43,6 +58,11 @@
 * **산림청(KFS) 100건 실증 기상 데이터 탐색기:**
   * 기상청/산림청 실측 데이터 기반 100개 샘플 기상 조건 탑재
   * 위험 등급별 필터링, 실시간 검색, 원클릭 3D 산불 발화 지원
+
+<div align="center">
+  <img src="docs/images/scenario_dataset_ui.jpg" alt="산불 위기 시나리오 및 산림청 100건 기상 데이터셋 탐색기" width="100%" style="border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,0.5);" />
+  <p align="center"><em>▲ 4대 위기 시나리오(양간지풍, 폭염, 한파, 태풍) 및 산림청(KFS) 100건 실측 기상 데이터 탐색기</em></p>
+</div>
 
 ### 4. 다층 Three.js 3D 파티클 & 다이내믹 라이팅 시스템
 * **3D 십자 화염 기둥 (Crossed-Quad Instanced Mesh):** 화선 현장에 수백 개의 입체적 화염 배치
@@ -56,6 +76,11 @@
 * **우측 통합 관제 독:** 기상 제어, Recharts 실시간 확산 동향 그래프, 시나리오 및 100건 데이터셋을 3개 탭으로 통합
 * **하단 재생 컨트롤러:** 재생/일시정지, 지형 초기화, 1x/5x/15x/60x 배속 전환, 실시간 기상 상태 요약 칩
 * **조명 & 카메라 시점 프리셋:** 주간(Day), 황혼(Dusk), 심야(Night) 및 3D 궤도(Orbit), 조감도(Top-Down), 화선 전면 추적(Track Front) 지원
+
+<div align="center">
+  <img src="docs/images/control_hub_ui.jpg" alt="통합 GIS 기상 제어 및 AI 위험도 분석 패널" width="100%" style="border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,0.5);" />
+  <p align="center"><em>▲ 정밀 기상 제어 슬라이더, AI 산불 위험 지수 게이지, Recharts 실시간 피해 면적 동향 차트</em></p>
+</div>
 
 ---
 
@@ -75,6 +100,13 @@
 
 ```text
 ├── docs/                        # 상세 개발 문서 풀세트
+│   ├── images/                  # 대시보드 및 시뮬레이션 고해상도 스크린샷 5종
+│   │   ├── hero_dashboard.jpg   # 100km² 메인 관제 콘솔 전경
+│   │   ├── night_fire_front.jpg # 심야 화선 및 동적 포인트 라이트
+│   │   ├── control_hub_ui.jpg   # 통합 기상 제어 및 AI 위험도 분석
+│   │   ├── aerial_spread_map.jpg# 조감도(Top-Down) 산불 전파 맵
+│   │   └── scenario_dataset_ui.jpg # 위기 시나리오 및 KFS 100건 데이터셋
+│   ├── USER_GUIDE.md            # 사용자 조작 및 실습 가이드
 │   ├── ARCHITECTURE.md          # 시스템 아키텍처 및 렌더링 파이프라인
 │   ├── SIMULATION_MODEL.md      # 산불 전파 물리 수학 공식 및 알고리즘
 │   ├── API_AND_MODULES.md       # 클래스, 모듈 및 타입 인터페이스 레퍼런스
@@ -179,6 +211,7 @@ $$P_{spread} = \min(0.98, \; R_{base} \times \Phi_{wind} \times \Phi_{slope})$$
 
 ## 📚 추가 개발 문서 (Documentation)
 
+* 📖 [사용자 조작 및 실습 가이드 (docs/USER_GUIDE.md)](docs/USER_GUIDE.md) : 대시보드 UI 설명, 3D 뷰포트 조작, 기상 제어 및 시나리오 실습 튜토리얼
 * 🏛️ [시스템 아키텍처 (docs/ARCHITECTURE.md)](docs/ARCHITECTURE.md) : 렌더링 파이프라인, 프레임 루프, 상태 관리 및 최적화 기법
 * 📐 [산불 수리 물리 모델 (docs/SIMULATION_MODEL.md)](docs/SIMULATION_MODEL.md) : 세포 자동자 규칙, Rothermel 공식, 비화 확률 모델
 * 🧩 [API 및 모듈 레퍼런스 (docs/API_AND_MODULES.md)](docs/API_AND_MODULES.md) : 주요 클래스, 함수, 컴포넌트, TypeScript 타입 명세

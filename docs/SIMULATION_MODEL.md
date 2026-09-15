@@ -14,6 +14,11 @@
 
 ## 2. 격자 및 이웃 셀 공간 정의
 
+<div align="center">
+  <img src="images/aerial_spread_map.jpg" alt="128x128 세포 자동자 격자 및 조감도 화선 전파" width="100%" style="border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.5);" />
+  <p align="center"><em>▲ 100 km² 지형 상의 128×128 세포 자동자 격자 전파 및 능선/협곡 화선 연소면 (조감도 뷰)</em></p>
+</div>
+
 시뮬레이터는 가로·세로 $10,000\text{m} \times 10,000\text{m}$ ($100\text{ km}^2$, 10,000 ha)의 실제 광역 산악 지형 영역을 $128 \times 128$개의 정사각형 셀(Cell)로 분할합니다.
 
 * **그리드 크기 ($N$):** $128 \times 128 = 16,384\text{ cells}$

@@ -6,6 +6,11 @@
 
 ## 1. 빌드 개요
 
+<div align="center">
+  <img src="images/hero_dashboard.jpg" alt="프로덕션 배포 3D 시뮬레이터 대시보드" width="100%" style="border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.5);" />
+  <p align="center"><em>▲ 프로덕션 번들(Vite 6.2 + WebGL)로 빌드된 60 FPS 무결점 3D 관제 인터페이스</em></p>
+</div>
+
 본 애플리케이션은 순수 클라이언트 기반 SPA(Single Page Application)로 번들링되므로, 별도의 백엔드 데이터베이스 서버 없이 정적 웹 서버(Nginx, Caddy, Apache) 또는 글로벌 정적 호스팅 서비스(GitHub Pages, Vercel, Cloudflare Pages, Netlify)에서 즉시 구동 가능합니다.
 
 ### 프로덕션 빌드 명령

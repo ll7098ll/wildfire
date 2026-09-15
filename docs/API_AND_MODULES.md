@@ -173,6 +173,11 @@ Three.js 씬 그래프, 카메라, 렌더러, 조명, 조작계 및 마우스 �
 
 ## 4. UI 컴포넌트 (`src/components/`)
 
+<div align="center">
+  <img src="images/control_hub_ui.jpg" alt="통합 GIS 재난 관제 허브 UI 컴포넌트" width="100%" style="border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.4);" />
+  <p align="center"><em>▲ IntegratedControlHub: 기상 제어 슬라이더, AI 위험도 지수 게이지, Recharts 실시간 차트</em></p>
+</div>
+
 ### 4.1 `IntegratedControlHub` (`src/components/IntegratedControlHub.tsx`)
 * **역할:** 통합 GIS 재난 관제 콘솔 허브.
 * **구조:**
@@ -182,6 +187,11 @@ Three.js 씬 그래프, 카메라, 렌더러, 조명, 조작계 및 마우스 �
     2. *피해 분석:* AI 종합 위험도 지수 게이지, 4단계 위험 등급 및 확률 분포, 내장 `FireStatsDashboard`.
     3. *시나리오·DB:* 4대 위기 시나리오 및 산림청 100건 실측 기상 데이터 탐색기(검색/필터/원클릭 발화).
   * **하단 재생 컨트롤러:** 재생/일시정지, 지형 초기화, 1x~60x 가속 버튼, 실시간 기상 상태 요약 칩.
+
+<div align="center">
+  <img src="images/scenario_dataset_ui.jpg" alt="시나리오 및 산림청 100건 데이터셋 컴포넌트" width="100%" style="border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.4);" />
+  <p align="center"><em>▲ 시나리오·DB 탭: 4대 위기 시나리오 카드 및 산림청(KFS) 100건 데이터베이스 테이블</em></p>
+</div>
 
 ### 4.2 `FireStatsDashboard` (`src/components/FireStatsDashboard.tsx`)
 * **역할:** Recharts 기반 실시간 화재 피해 및 화선 추이 시각화 대시보드.

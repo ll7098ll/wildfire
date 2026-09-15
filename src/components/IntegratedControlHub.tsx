@@ -331,7 +331,7 @@ export const IntegratedControlHub: React.FC<IntegratedControlHubProps> = React.m
 
       {/* 2. RIGHT INTEGRATED CONTROL & ANALYTICS DOCK (Single Unified Window) */}
       {isPanelOpen && (
-        <aside className="absolute top-18 right-4 bottom-22 z-20 flex flex-col pointer-events-auto w-[420px] max-w-[calc(100vw-32px)] transition-all duration-300">
+        <aside id="unified-control-hub" className="absolute top-18 right-4 bottom-22 z-20 flex flex-col pointer-events-auto w-[420px] max-w-[calc(100vw-32px)] transition-all duration-300">
           <div className="bg-stone-950/95 backdrop-blur-md border border-stone-800/90 rounded-2xl shadow-2xl flex flex-col h-full overflow-hidden text-stone-100">
             {/* Header with Unified Navigation Tabs */}
             <div className="p-3 border-b border-stone-800/80 bg-stone-900/50">

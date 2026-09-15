@@ -63,7 +63,11 @@ export class SceneManager {
     this.targetLookAt.copy(initialTarget);
 
     // 2. Renderer
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: 'high-performance',
+      preserveDrawingBuffer: true,
+    });
     this.renderer.setSize(width, height);
     // Cap pixel ratio at 1.5 for silky smooth GPU rendering without quality loss on Retina displays
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
@@ -259,7 +263,7 @@ export class SceneManager {
     }
   }
 
-  public setCameraPreset(preset: CameraPreset, fireFrontCenter?: { x: number; y: number; z: number }) {
+  public setCameraPreset(preset: CameraPreset, fireFrontCenter?: { x: number; y: number; z: number }, immediate: boolean = false) {
     this.currentCameraPreset = preset;
     const is100x = this.terrain.config.scaleMode === '100x';
 
@@ -287,6 +291,13 @@ export class SceneManager {
         this.targetCameraPos.set(fireFrontCenter.x + 110, fireFrontCenter.y + 80, fireFrontCenter.z + 140);
         this.targetLookAt.set(fireFrontCenter.x, fireFrontCenter.y, fireFrontCenter.z);
       }
+    }
+
+    if (immediate) {
+      this.camera.position.copy(this.targetCameraPos);
+      this.controls.target.copy(this.targetLookAt);
+      this.controls.update();
+      this.render();
     }
   }
 
@@ -420,6 +431,15 @@ export class SceneManager {
 
     // 4. Render
     this.renderer.render(this.scene, this.camera);
+  }
+
+  public render() {
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  public captureDataURL(quality: number = 0.94): string {
+    this.render();
+    return this.renderer.domElement.toDataURL('image/jpeg', quality);
   }
 
   public handleResize(width: number, height: number) {

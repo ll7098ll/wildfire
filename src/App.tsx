@@ -6,6 +6,7 @@ import { SceneManager } from './three/SceneManager';
 import { TerrainMesh } from './three/TerrainMesh';
 import { CameraPreset, LightingMode, SimulationStats, TerrainScaleMode, WeatherConditions } from './types';
 import { IntegratedControlHub } from './components/IntegratedControlHub';
+import html2canvas from 'html2canvas';
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -57,6 +58,7 @@ export default function App() {
 
   // Initialize Three.js and Simulation Engine
   useEffect(() => {
+    console.log('🚀 [DEBUG] App useEffect running! container:', !!containerRef.current);
     if (!containerRef.current) return;
 
     // Clean up any existing children to prevent duplicate canvases (StrictMode safe)
@@ -94,6 +96,9 @@ export default function App() {
       handleIgniteClick
     );
     sceneManagerRef.current = sceneManager;
+    (window as any).__sceneManager = sceneManager;
+    (window as any).__engine = engine;
+    (window as any).__terrainMesh = terrainMesh;
 
     // Immediate initial layout sync
     const initW = containerRef.current.clientWidth || window.innerWidth || 1200;
@@ -103,11 +108,17 @@ export default function App() {
     let lastTime = performance.now();
     let animId: number;
     let uiThrottle = 0;
+    const isHeadless = typeof navigator !== 'undefined' && /headless/i.test(navigator.userAgent);
+    let lastRenderTime = 0;
 
     const animate = (time: number) => {
       animId = requestAnimationFrame(animate);
 
-      const rawDt = Math.min((time - lastTime) / 1000, 0.1);
+      if (isHeadless && time - lastRenderTime < 50) {
+        return;
+      }
+      const rawDt = Math.min((time - (lastRenderTime || time)) / 1000, 0.1);
+      lastRenderTime = time;
       lastTime = time;
 
       const effectiveDt = rawDt * speedRef.current;
@@ -310,6 +321,43 @@ export default function App() {
     setTimeout(() => setUserIgnitionAlert(null), 4000);
     setIsPlaying(true);
   };
+
+  // Expose helpers for automated testing and real screenshot capture
+  useEffect(() => {
+    (window as any).__simHelpers = {
+      ignite: (gx: number, gy: number, r = 3) => {
+        engineRef.current?.ignite(gx, gy, r);
+        setIsPlaying(true);
+      },
+      applyScenario: handleApplyScenario,
+      igniteSample: handleIgniteSample,
+      setLighting: handleSelectLighting,
+      setCamera: handleSelectCamera,
+      setWeather: handleUpdateWeather,
+      setSpeed: (s: number) => setSpeed(s),
+      reset: handleReset,
+      getStats: () => stats,
+      captureScene3D: () => sceneManagerRef.current?.captureDataURL(0.94),
+      renderNow: () => sceneManagerRef.current?.render(),
+      captureScreenshot: async (selector?: string) => {
+        const target = selector ? (document.querySelector(selector) as HTMLElement) : document.body;
+        if (!target) return null;
+        try {
+          const cvs = await html2canvas(target, {
+            useCORS: true,
+            allowTaint: true,
+            backgroundColor: '#0c0a09',
+            scale: 1,
+            logging: false,
+          });
+          return cvs.toDataURL('image/jpeg', 0.92);
+        } catch (e) {
+          console.error('html2canvas error:', e);
+          return null;
+        }
+      },
+    };
+  }, [stats]);
 
   return (
     <main className="relative w-full h-full min-h-screen overflow-hidden bg-stone-950 select-none font-sans">
